@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Go Picadera — Consola</title>
+<meta name="description" content="Consola de pedidos e inventario de Go Picadera.">
+<!-- Private tool. It should never turn up in a search for the restaurant. -->
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="./logo.png" type="image/png">
+<style>
+  :root{
+    --ink:#0a0b0e; --surface:#131519; --surface-2:#1b1e25;
+    --line:rgba(255,255,255,.09); --line-warm:rgba(255,196,0,.22);
+    --yellow:#ffc400; --ember:#ff6a1a; --green:#3fd07a;
+    --text:#f6f4ef; --muted:#9c9ea8; --faint:#6a6c76;
+  }
+  *,*::before,*::after{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--ink); color:var(--text);
+    font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+    -webkit-font-smoothing:antialiased;
+    min-height:100dvh; display:flex; align-items:center; justify-content:center;
+    padding:24px;
+    /* Warm glow behind the badge, so the page is not a flat black rectangle. */
+    background-image:
+      radial-gradient(60% 50% at 50% 0%, rgba(255,106,26,.13), transparent 70%),
+      radial-gradient(40% 40% at 50% 100%, rgba(255,196,0,.06), transparent 70%);
+  }
+  .card{
+    width:100%; max-width:560px; text-align:center;
+    background:var(--surface); border:1px solid var(--line);
+    border-radius:20px; padding:40px 32px;
+  }
+  @media (max-width:520px){ .card{padding:32px 20px} }
+
+  .logo{ width:auto; height:104px; margin:0 auto 20px; display:block }
+  .word{ font-size:32px; font-weight:900; letter-spacing:-.02em; margin:0 0 6px }
+  .word span{ color:var(--ember) }
+  .sub{ color:var(--muted); font-size:15px; margin:0 0 28px }
+
+  .badge{
+    display:inline-flex; align-items:center; gap:8px;
+    border:1px solid var(--line-warm); border-radius:999px;
+    padding:7px 15px; font-size:12px; font-weight:700;
+    text-transform:uppercase; letter-spacing:.09em;
+    color:var(--yellow); margin-bottom:28px;
+  }
+  .dot{
+    width:7px; height:7px; border-radius:50%; background:var(--yellow);
+    animation:pulse 1.8s ease-in-out infinite;
+  }
+  @keyframes pulse{ 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.35;transform:scale(.8)} }
+  @media (prefers-reduced-motion:reduce){ .dot{animation:none} }
+
+  .list{ list-style:none; margin:0 0 28px; padding:0; text-align:left }
+  .list li{
+    display:flex; align-items:center; gap:12px;
+    padding:11px 14px; border-radius:11px; background:var(--surface-2);
+    margin-bottom:7px; font-size:14.5px;
+  }
+  .tick{ flex:none; width:19px; height:19px }
+  .state{ margin-left:auto; font-size:11px; font-weight:700;
+          text-transform:uppercase; letter-spacing:.07em; color:var(--green) }
+  .state.wip{ color:var(--faint) }
+
+  .foot{ color:var(--faint); font-size:12.5px; line-height:1.7; margin:0;
+         border-top:1px solid var(--line); padding-top:20px }
+  .foot strong{ color:var(--muted); font-weight:600 }
+</style>
+</head>
+<body>
+  <main class="card">
+    <img class="logo" src="./logo.png" alt="Go Picadera">
+
+    <h1 class="word"><span>GO</span>PICADERA</h1>
+    <p class="sub">Consola de pedidos e inventario</p>
+
+    <div class="badge"><span class="dot"></span> En construcción</div>
+
+    <ul class="list">
+      <li>
+        <svg class="tick" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+          <circle cx="10" cy="10" r="9" stroke="#3fd07a" stroke-width="1.6"/>
+          <path d="M6 10.4l2.6 2.6L14.2 7.4" stroke="#3fd07a" stroke-width="1.9"
+                stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Panel de pedidos en vivo <span class="state">Listo</span>
+      </li>
+      <li>
+        <svg class="tick" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+          <circle cx="10" cy="10" r="9" stroke="#3fd07a" stroke-width="1.6"/>
+          <path d="M6 10.4l2.6 2.6L14.2 7.4" stroke="#3fd07a" stroke-width="1.9"
+                stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Inventario de productos e ingredientes <span class="state">Listo</span>
+      </li>
+      <li>
+        <svg class="tick" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+          <circle cx="10" cy="10" r="9" stroke="#3fd07a" stroke-width="1.6"/>
+          <path d="M6 10.4l2.6 2.6L14.2 7.4" stroke="#3fd07a" stroke-width="1.9"
+                stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Menú, precios y disponibilidad <span class="state">Listo</span>
+      </li>
+      <li>
+        <svg class="tick" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+          <circle cx="10" cy="10" r="9" stroke="#3fd07a" stroke-width="1.6"/>
+          <path d="M6 10.4l2.6 2.6L14.2 7.4" stroke="#3fd07a" stroke-width="1.9"
+                stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Equipo y permisos <span class="state">Listo</span>
+      </li>
+      <li>
+        <svg class="tick" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+          <circle cx="10" cy="10" r="9" stroke="#3fd07a" stroke-width="1.6"/>
+          <path d="M6 10.4l2.6 2.6L14.2 7.4" stroke="#3fd07a" stroke-width="1.9"
+                stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Reportes de ventas <span class="state">Listo</span>
+      </li>
+      <li>
+        <svg class="tick" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+          <circle cx="10" cy="10" r="9" stroke="#6a6c76" stroke-width="1.6"
+                  stroke-dasharray="3.4 3.1"/>
+        </svg>
+        Bot de WhatsApp <span class="state wip">En curso</span>
+      </li>
+    </ul>
+
+    <p class="foot">
+      Esta es el área privada para <strong>el dueño y el personal</strong>.
+      Estamos conectando la base de datos; en cuanto termine, aquí se entra con
+      usuario y contraseña.
+    </p>
+  </main>
+</body>
+</html>
