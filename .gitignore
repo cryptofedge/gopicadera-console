@@ -46,3 +46,11 @@ deno.lock
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# cloudflare / opennext
+.open-next
+.wrangler
+.dev.vars
+
+# static export output
+out/

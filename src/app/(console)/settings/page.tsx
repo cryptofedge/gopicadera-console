@@ -1,8 +1,8 @@
-import { requireOwner } from "@/lib/auth";
-import { serverClient } from "@/lib/supabase";
-import { revalidatePath } from "next/cache";
+"use client";
 
-export const dynamic = "force-dynamic";
+import { useEffect, useState } from "react";
+import { browserClient } from "@/lib/supabase-browser";
+import { useQuery } from "@/lib/useQuery";
 
 const DAYS = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
 
@@ -14,47 +14,64 @@ const DEFAULT_HOURS: Hours = [
   { open: 11, close: 25 },
 ];
 
-export default async function SettingsPage() {
-  await requireOwner();
-  const sb = await serverClient();
+type Setting = { key: string; value: unknown };
 
-  const { data } = await sb.from("settings").select("key, value");
-  const map = Object.fromEntries((data ?? []).map((r) => [r.key, r.value]));
-  const hours: Hours = (map.hours as Hours) ?? DEFAULT_HOURS;
-  const whatsapp = (map.whatsapp as string) ?? "";
+const field = {
+  background: "var(--ink)",
+  borderColor: "var(--line)",
+  color: "var(--text)",
+};
 
-  async function save(formData: FormData) {
-    "use server";
-    await requireOwner();
-    const sb = await serverClient();
+export default function SettingsPage() {
+  const { data, loading, error, reload } = useQuery<Setting[]>(
+    (sb) => sb.from("settings").select("key, value") as never,
+  );
+
+  const [hours, setHours] = useState<Hours>(DEFAULT_HOURS);
+  const [whatsapp, setWhatsapp] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState("");
+
+  // Seed the form once the stored values arrive. Server-rendered defaultValue
+  // used to do this; in the browser the data lands after the first paint.
+  useEffect(() => {
+    if (!data) return;
+    const map = Object.fromEntries(data.map((r) => [r.key, r.value]));
+    setHours((map.hours as Hours) ?? DEFAULT_HOURS);
+    setWhatsapp((map.whatsapp as string) ?? "");
+  }, [data]);
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    setSaved("");
 
     // close > 24 encodes "past midnight" — Friday closing at 1am is close: 25.
-    const next: Hours = DAYS.map((_, i) => {
-      const open = Number(formData.get(`open-${i}`));
-      let close = Number(formData.get(`close-${i}`));
-      if (close <= open) close += 24;
-      return { open, close };
-    });
+    const next: Hours = hours.map(({ open, close }) => ({
+      open,
+      close: close <= open ? close + 24 : close,
+    }));
 
-    await sb.from("settings").upsert([
-      { key: "hours", value: next },
-      { key: "whatsapp", value: String(formData.get("whatsapp") ?? "") },
-    ]);
+    const { error: err } = await browserClient()
+      .from("settings")
+      .upsert([
+        { key: "hours", value: next },
+        { key: "whatsapp", value: whatsapp },
+      ]);
 
-    revalidatePath("/settings");
+    setSaving(false);
+    setSaved(err ? `No se pudo guardar: ${err.message}` : "Guardado.");
+    if (!err) reload();
   }
 
-  const field = {
-    background: "var(--ink)",
-    borderColor: "var(--line)",
-    color: "var(--text)",
-  };
+  if (loading) return <p style={{ color: "var(--faint)" }}>Cargando ajustes…</p>;
+  if (error) return <p style={{ color: "var(--red)" }}>{error}</p>;
 
   return (
     <>
       <h1 className="text-xl font-black mb-3">Ajustes</h1>
 
-      <form action={save}
+      <form onSubmit={save}
             className="rounded-xl border p-4 max-w-2xl"
             style={{ background: "var(--surface)", borderColor: "var(--line)" }}>
         <h2 className="text-xs font-bold uppercase tracking-wider mb-3"
@@ -63,12 +80,23 @@ export default async function SettingsPage() {
         {DAYS.map((d, i) => (
           <div key={d} className="flex items-center gap-3 mb-2">
             <span className="w-24 text-sm">{d}</span>
-            <input name={`open-${i}`} type="number" min={0} max={23} defaultValue={hours[i]?.open ?? 11}
-                   className="w-20 px-2 py-1.5 rounded-lg border outline-none nums" style={field} />
+            <input
+              type="number" min={0} max={23}
+              value={hours[i]?.open ?? 11}
+              onChange={(e) => setHours((h) =>
+                h.map((v, j) => (j === i ? { ...v, open: Number(e.target.value) } : v)))}
+              className="w-20 px-2 py-1.5 rounded-lg border outline-none nums" style={field}
+              aria-label={`${d} abre`}
+            />
             <span style={{ color: "var(--faint)" }}>a</span>
-            <input name={`close-${i}`} type="number" min={0} max={23}
-                   defaultValue={(hours[i]?.close ?? 23) % 24}
-                   className="w-20 px-2 py-1.5 rounded-lg border outline-none nums" style={field} />
+            <input
+              type="number" min={0} max={23}
+              value={(hours[i]?.close ?? 23) % 24}
+              onChange={(e) => setHours((h) =>
+                h.map((v, j) => (j === i ? { ...v, close: Number(e.target.value) } : v)))}
+              className="w-20 px-2 py-1.5 rounded-lg border outline-none nums" style={field}
+              aria-label={`${d} cierra`}
+            />
             <span className="text-xs" style={{ color: "var(--faint)" }}>
               {(hours[i]?.close ?? 23) > 24 ? "cierra pasada la medianoche" : ""}
             </span>
@@ -82,17 +110,30 @@ export default async function SettingsPage() {
 
         <h2 className="text-xs font-bold uppercase tracking-wider mb-2"
             style={{ color: "var(--muted)" }}>WhatsApp del bot</h2>
-        <input name="whatsapp" defaultValue={whatsapp} placeholder="1XXXXXXXXXX"
-               className="w-full max-w-xs px-3 py-2 rounded-lg border outline-none nums mb-1"
-               style={field} />
+        <input
+          value={whatsapp}
+          onChange={(e) => setWhatsapp(e.target.value)}
+          placeholder="1XXXXXXXXXX"
+          aria-label="WhatsApp del bot"
+          className="w-full max-w-xs px-3 py-2 rounded-lg border outline-none nums mb-1"
+          style={field}
+        />
         <p className="text-xs mb-5" style={{ color: "var(--faint)" }}>
           Número nuevo de WhatsApp Business. Solo dígitos, con código de país.
         </p>
 
-        <button className="px-5 py-2 rounded-full font-bold"
+        <button disabled={saving}
+                className="px-5 py-2 rounded-full font-bold disabled:opacity-50"
                 style={{ background: "var(--yellow)", color: "#0A0B0E" }}>
-          Guardar
+          {saving ? "Guardando…" : "Guardar"}
         </button>
+
+        {saved && (
+          <span className="ml-3 text-sm"
+                style={{ color: saved === "Guardado." ? "var(--green)" : "var(--red)" }}>
+            {saved}
+          </span>
+        )}
       </form>
 
       <p className="mt-4 text-xs max-w-2xl" style={{ color: "var(--faint)" }}>

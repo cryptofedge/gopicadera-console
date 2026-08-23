@@ -10,7 +10,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { browserClient } from "@/lib/supabase-browser";
-import type { Role } from "@/lib/auth";
+import type { Role } from "@/lib/session";
 
 export type Dish = {
   id: string;

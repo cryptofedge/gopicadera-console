@@ -46,8 +46,10 @@ export default function LoginForm({ next }: { next: string }) {
       >
         {/* The badge earns its space here — a login screen is the one place
             with room for the full mark at a size where it actually reads. */}
+        {/* Next does not rewrite a plain <img>, so the base path goes on by
+            hand — without it this resolves to the domain root and 404s. */}
         <img
-          src="/logo.png"
+          src={`${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/logo.png`}
           alt="Go Picadera"
           width={455}
           height={420}

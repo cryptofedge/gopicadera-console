@@ -17,11 +17,16 @@ export default function StaffTable({
   invite,
 }: {
   rows: Member[];
-  invite: (fd: FormData) => Promise<void>;
+  // Returns an error message, or null on success. Account creation now happens
+  // in the browser against Supabase, so failures (duplicate email, weak
+  // password, confirmation required) have to surface here rather than being
+  // swallowed by a server action.
+  invite: (fd: FormData) => Promise<string | null>;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
+  const [inviteError, setInviteError] = useState<string | null>(null);
 
   const owners = rows.filter((r) => r.role === "owner" && r.active).length;
 
@@ -77,7 +82,12 @@ export default function StaffTable({
 
       {open && (
         <form
-          action={invite}
+          action={async (fd) => {
+            setInviteError(null);
+            const err = await invite(fd);
+            setInviteError(err);
+            if (!err) setOpen(false);
+          }}
           className="rounded-xl border p-4 mb-4 grid gap-3"
           style={{ background: "var(--surface)", borderColor: "var(--line-warm)",
                    gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))" }}
@@ -97,9 +107,15 @@ export default function StaffTable({
                   style={{ background: "var(--yellow)", color: "#0A0B0E" }}>
             Crear cuenta
           </button>
+          {inviteError && (
+            <p className="text-xs col-span-full" style={{ color: "var(--red)" }} role="alert">
+              {inviteError}
+            </p>
+          )}
           <p className="text-xs col-span-full" style={{ color: "var(--faint)" }}>
-            Entrégale la contraseña en persona y pídele que la cambie. La cuenta
-            queda activa de inmediato.
+            Entrégale la contraseña en persona y pídele que la cambie. Si el
+            proyecto pide confirmar el correo, la persona tendrá que abrir el
+            enlace que le llegue antes de poder entrar.
           </p>
         </form>
       )}

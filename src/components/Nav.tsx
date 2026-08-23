@@ -10,7 +10,7 @@
  */
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import type { Role } from "@/lib/auth";
+import { useSession, type Role } from "@/lib/session";
 
 type Item = { href: string; label: string; owner?: boolean };
 
@@ -25,6 +25,7 @@ const ITEMS: Item[] = [
 
 export default function Nav({ role, name }: { role: Role; name: string }) {
   const path = usePathname();
+  const { signOut } = useSession();
   const items = ITEMS.filter((i) => !i.owner || role === "owner");
 
   return (
@@ -65,11 +66,16 @@ export default function Nav({ role, name }: { role: Role; name: string }) {
         >
           {role === "owner" ? "Dueño" : "Staff"}
         </span>
-        <form action="/auth/signout" method="post">
-          <button className="text-sm" style={{ color: "var(--faint)" }}>
-            Salir
-          </button>
-        </form>
+        {/* Was a POST to a route handler, so a prefetch or an <img> could not
+            trigger it. With no server, sign-out is a direct Supabase call --
+            still not reachable by anything but a real click. */}
+        <button
+          onClick={() => void signOut()}
+          className="text-sm"
+          style={{ color: "var(--faint)" }}
+        >
+          Salir
+        </button>
       </span>
     </nav>
   );

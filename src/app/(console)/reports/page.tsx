@@ -1,9 +1,16 @@
-import { requireOwner } from "@/lib/auth";
-import { serverClient } from "@/lib/supabase";
+"use client";
 
-export const dynamic = "force-dynamic";
+import { useQuery } from "@/lib/useQuery";
 
 const money = (n: number) => "$" + Number(n ?? 0).toFixed(2);
+
+type Row = {
+  total: number;
+  status: string;
+  source: string;
+  created_at: string;
+  order_items: { name: string; qty: number }[] | null;
+};
 
 function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
@@ -17,31 +24,33 @@ function Stat({ label, value, sub }: { label: string; value: string; sub?: strin
   );
 }
 
-export default async function ReportsPage() {
-  await requireOwner();
-  const sb = await serverClient();
-
-  const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
-  const weekAgo = new Date(Date.now() - 7 * 864e5);
-
+export default function ReportsPage() {
   // Only completed orders count as revenue. Counting tickets still in the queue
   // would make the number drift every time someone cancels.
-  const { data: week } = await sb
-    .from("orders")
-    .select("total, status, source, created_at, order_items(name, qty)")
-    .eq("status", "done")
-    .gte("created_at", weekAgo.toISOString());
+  const { data, loading, error } = useQuery<Row[]>(
+    (sb) =>
+      sb
+        .from("orders")
+        .select("total, status, source, created_at, order_items(name, qty)")
+        .eq("status", "done")
+        .gte("created_at", new Date(Date.now() - 7 * 864e5).toISOString()) as never,
+  );
 
-  const rows = week ?? [];
+  if (loading) return <p style={{ color: "var(--faint)" }}>Cargando reportes…</p>;
+  if (error) return <p style={{ color: "var(--red)" }}>{error}</p>;
+
+  const rows = data ?? [];
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
   const today = rows.filter((o) => new Date(o.created_at) >= startOfDay);
 
-  const sum = (a: typeof rows) => a.reduce((t, o) => t + Number(o.total ?? 0), 0);
-  const avg = (a: typeof rows) => (a.length ? sum(a) / a.length : 0);
+  const sum = (a: Row[]) => a.reduce((t, o) => t + Number(o.total ?? 0), 0);
+  const avg = (a: Row[]) => (a.length ? sum(a) / a.length : 0);
 
   // Best sellers by quantity actually sold, not by what we featured.
   const counts = new Map<string, number>();
   rows.forEach((o) =>
-    (o.order_items ?? []).forEach((it: { name: string; qty: number }) =>
+    (o.order_items ?? []).forEach((it) =>
       counts.set(it.name, (counts.get(it.name) ?? 0) + Number(it.qty ?? 0)),
     ),
   );

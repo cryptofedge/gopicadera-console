@@ -1,58 +1,75 @@
-import { requireOwner } from "@/lib/auth";
-import { serverClient } from "@/lib/supabase";
-import { revalidatePath } from "next/cache";
-import { adminClient } from "@/lib/supabase";
+"use client";
+
+import { createClient } from "@supabase/supabase-js";
+import { browserClient } from "@/lib/supabase-browser";
+import { useQuery } from "@/lib/useQuery";
 import StaffTable, { type Member } from "./StaffTable";
 
-export const dynamic = "force-dynamic";
-
 /**
- * Team management. Owner only — requireOwner() redirects staff before this
+ * Team management. Owner only — the console layout redirects staff before this
  * renders, and RLS refuses the writes regardless.
  */
-export default async function StaffPage() {
-  await requireOwner();
-  const sb = await serverClient();
-
-  const { data } = await sb
-    .from("profiles")
-    .select("id, full_name, role, active, created_at")
-    .order("created_at");
+export default function StaffPage() {
+  const { data, loading, error, reload } = useQuery<Member[]>(
+    (sb) =>
+      sb
+        .from("profiles")
+        .select("id, full_name, role, active, created_at")
+        .order("created_at") as never,
+  );
 
   /**
-   * Creating a login needs the service-role key, so it happens here on the
-   * server and never in the browser. The new account is created already
-   * confirmed — the owner is standing next to the person being added, and an
-   * email round-trip just means a staff member who can't clock in.
+   * Creating a login, without a server.
+   *
+   * The old version called auth.admin.createUser() with the service-role key.
+   * There is nowhere to keep that key on a static host, so this uses ordinary
+   * signUp() instead — the same call a customer self-registering would make.
+   *
+   * The catch: signUp() signs the new account in, which would kick the owner
+   * out of their own console. So it runs on a throwaway client with
+   * persistSession off. That client writes no tokens to storage, leaving the
+   * owner's session untouched.
+   *
+   * The profile row is then written from the OWNER's session, because only an
+   * owner is allowed to set a role.
    */
-  async function invite(formData: FormData) {
-    "use server";
-    await requireOwner();
+  async function invite(fd: FormData): Promise<string | null> {
+    const email = String(fd.get("email") ?? "").trim();
+    const name = String(fd.get("name") ?? "").trim();
+    const role = fd.get("role") === "owner" ? "owner" : "staff";
+    const password = String(fd.get("password") ?? "");
 
-    const email = String(formData.get("email") ?? "").trim();
-    const name = String(formData.get("name") ?? "").trim();
-    const role = formData.get("role") === "owner" ? "owner" : "staff";
-    const password = String(formData.get("password") ?? "");
+    if (!email || password.length < 8) {
+      return "Correo obligatorio y contraseña de al menos 8 caracteres.";
+    }
 
-    if (!email || password.length < 8) return;
+    const isolated = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } },
+    );
 
-    const admin = adminClient();
-    const { data: created, error } = await admin.auth.admin.createUser({
+    const { data: created, error: signUpError } = await isolated.auth.signUp({
       email,
       password,
-      email_confirm: true,
     });
-    if (error || !created.user) return;
+    if (signUpError) return signUpError.message;
+    if (!created.user) return "No se pudo crear la cuenta.";
 
-    await admin.from("profiles").upsert({
+    const { error: profileError } = await browserClient().from("profiles").upsert({
       id: created.user.id,
       full_name: name || email,
       role,
       active: true,
     });
+    if (profileError) return profileError.message;
 
-    revalidatePath("/staff");
+    reload();
+    return null;
   }
 
-  return <StaffTable rows={(data ?? []) as unknown as Member[]} invite={invite} />;
+  if (loading) return <p style={{ color: "var(--faint)" }}>Cargando equipo…</p>;
+  if (error) return <p style={{ color: "var(--red)" }}>{error}</p>;
+
+  return <StaffTable rows={data ?? []} invite={invite} />;
 }

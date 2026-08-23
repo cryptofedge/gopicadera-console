@@ -15,7 +15,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { browserClient } from "@/lib/supabase-browser";
-import type { Role } from "@/lib/auth";
+import type { Role } from "@/lib/session";
 
 export type Level = {
   id: string;

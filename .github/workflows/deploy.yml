@@ -1,0 +1,65 @@
+name: Deploy console to GitHub Pages
+
+# Builds the static export and publishes it. Pages must be set to build from
+# "GitHub Actions" (Settings -> Pages -> Source), not from a branch.
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let two deploys race. Queue instead of cancelling, so a push that
+# lands mid-deploy still ships rather than being silently dropped.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run build
+        env:
+          # NEXT_PUBLIC_* values are compiled into the JavaScript at build time,
+          # not read at runtime — which is why they belong here and not in some
+          # runtime config. The anon key is public by design; Row Level Security
+          # is what actually decides what it can touch.
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+
+      # Fail loudly rather than shipping a console that cannot reach Supabase.
+      - name: Check the build picked up a real key
+        run: |
+          if grep -rq "placeholder-anon-key" out/_next/static/chunks/ 2>/dev/null; then
+            echo "::error::Built with the placeholder anon key. Set the NEXT_PUBLIC_SUPABASE_ANON_KEY repository secret."
+            exit 1
+          fi
+          test -f out/.nojekyll || { echo "::error::out/.nojekyll missing — Jekyll will strip the _next directory."; exit 1; }
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: out
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

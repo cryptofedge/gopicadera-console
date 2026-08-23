@@ -1,94 +1,84 @@
 # Deploying the console
 
-The storefront and the console are deployed separately and neither affects the
-other. **Nothing here changes the client's existing storefront link.**
+Both halves of Go Picadera now live on GitHub Pages, in separate repos. Nothing
+here touches the storefront link the client already has.
 
 | | Storefront | Console |
 | --- | --- | --- |
-| What it is | One static HTML file | Next.js app, server-rendered |
-| Hosted on | GitHub Pages | Netlify |
+| Repo | `cryptofedge/GoPicadera` | `cryptofedge/gopicadera-console` |
+| URL | `cryptofedge.github.io/GoPicadera/` | `cryptofedge.github.io/gopicadera-console/` |
+| What it is | One static HTML file | Static export of a Next.js app |
 | Who uses it | Customers | Owner and staff |
-| Indexed by Google | Yes, eventually | Never |
+| Indexed | Yes, eventually | Never |
 
-## Why not GitHub Pages
+## What changed to make this possible
 
-Pages serves static files and nothing else. This app needs a running Node
-server for three separate reasons:
+The console was originally server-rendered. GitHub Pages runs no server, so it
+was rebuilt as a browser-only app:
 
-1. Pages query Supabase on the server before any HTML is sent.
-2. `src/proxy.ts` refreshes the session cookie on every request.
-3. The `service_role` key must stay server-side. On a static host there is no
-   server to keep it on.
+- Seven pages that queried Supabase on the server now query it from the browser
+- Two Server Actions became direct Supabase calls
+- `proxy.ts` and the `/auth/signout` route handler are gone; the login gate and
+  sign-out are client-side
+- **The `service_role` key is gone entirely.** Creating a staff login now uses
+  `signUp()` on a throwaway client with `persistSession: false`, so the new
+  account never displaces the owner's session
 
-Static export is not a workaround — Next's own docs list proxy support under
-static export as **No**.
+## The thing to understand before shipping this
 
----
+**Row Level Security is now the only thing protecting the data.**
+
+There is no server. The anon key ships inside the JavaScript — that is normal
+and by design — but it means every table is reachable by anyone who opens the
+console URL. What they can actually read or write is decided entirely by policy
+in `../backend/schema.sql`.
+
+Two consequences:
+
+1. Nothing may sit in a table that its reader is not allowed to see. There is no
+   server-side filter to fall back on.
+2. **The policies have never been executed against a live database.** Test them
+   with a real staff account before this URL goes anywhere near the client:
+   sign in as staff and confirm a price change is refused by Postgres, not just
+   hidden by the UI.
 
 ## Steps
 
-Steps 1 and 2 need an account and a password, so they are yours to do.
+### 1. Repository visibility
 
-### 1. Put the code in a private GitHub repo
+Pages on a **private** repo requires GitHub Pro. On the free plan the repo must
+be **public**.
 
-**Private.** Not `cryptofedge/GoPicadera` — that repo is public and holds only
-the storefront. This one is the back office.
+Public is defensible here — there are no secrets in it (`.env.local` is
+gitignored and the `service_role` key no longer exists anywhere in the codebase)
+— but it does mean the source is readable, so a weak RLS policy is readable too.
+Read the section above before flipping it.
 
 ```bash
-gh repo create gopicadera-console --private --source=. --push
+gh repo edit cryptofedge/gopicadera-console --visibility public
 ```
 
-Or create it through the GitHub web UI and push the `admin/` folder to it.
+### 2. Build secrets
 
-`.gitignore` already excludes `.env.local`, so no key can ride along by
-accident. Worth confirming with `git status` before the first push anyway.
+**Settings → Secrets and variables → Actions → New repository secret:**
 
-### 2. Connect it to Netlify
+| Name | Value |
+| --- | --- |
+| `NEXT_PUBLIC_SUPABASE_URL` | `https://xjuwamydkrzxdxjezlwa.supabase.co` |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | the anon / publishable key |
 
-Import the repo at app.netlify.com → **Add new project → Import an existing
-project**. `netlify.toml` in this folder supplies the build command, the
-publish directory and the Next.js runtime, so accept what it detects.
+The workflow fails deliberately if it builds with the placeholder key, rather
+than publishing a console that cannot reach Supabase.
 
-If you push the whole `GoPicadera` folder rather than just `admin/`, set
-**Base directory** to `admin`.
+### 3. Turn on Pages
 
-Create a **new** project. Do not reuse `gopicadera-preview` — that one is an
-abandoned static storefront preview and its config expects a plain HTML folder.
+**Settings → Pages → Source → GitHub Actions.** Not "Deploy from a branch" —
+the workflow publishes the built output, and there is no branch holding it.
 
-> **Vercel instead?** It is the more natural host for Next.js and the steps are
-> near-identical (Root Directory rather than Base directory, and it ignores
-> `netlify.toml`). It was not chosen because its signup demands phone
-> verification that rejects VoIP numbers.
+### 4. Push
 
-### 3. Environment variables
-
-In Netlify: **Site configuration → Environment variables**. Add all three:
-
-| Name | Value | Notes |
-| --- | --- | --- |
-| `NEXT_PUBLIC_SUPABASE_URL` | `https://xjuwamydkrzxdxjezlwa.supabase.co` | Public. |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | anon / publishable key | Public. RLS still applies to everything it does. |
-| `SUPABASE_SERVICE_ROLE_KEY` | service role key | **Secret. Bypasses RLS entirely.** |
-
-The service role key goes into this box and nowhere else — not a repo, not a
-chat window, not a screenshot. If it ever leaks, rotate it in the Supabase
-dashboard immediately; anyone holding it can read and rewrite every table
-regardless of policy.
-
-### 4. Domain
-
-Until the GoDaddy domain is connected, Netlify gives the app a
-`*.netlify.app` URL. That works, but don't hand it to the client — wait for
-the real subdomain.
-
-Once `gopicadera.com` is pointed at the storefront, add a subdomain for this:
-
-- `gopicadera.com` → storefront (GitHub Pages)
-- `admin.gopicadera.com` → this console (Netlify)
-
-In Netlify: **Domain management → Add a domain**, enter
-`admin.gopicadera.com`, then create the CNAME it gives you in GoDaddy's DNS
-panel.
+`.github/workflows/deploy.yml` builds and deploys on every push to `master`, or
+on demand from the Actions tab.
 
 ### 5. First owner account
 
@@ -96,40 +86,25 @@ Supabase does not know who the owner is until you tell it. After the schema is
 applied, create the account in **Authentication → Users → Add user**, then run
 the bootstrap SQL in `../backend/SETUP.md` to give that user the `owner` role.
 
-Every account created afterwards defaults to `staff`, and only an owner can
-promote anyone.
+Also check **Authentication → Providers → Email**: if "Confirm email" is on, a
+staff member created from the console cannot sign in until they click the link
+in their inbox. Turning it off matches the old behaviour, where the owner
+handed over the password in person.
 
----
+### 6. Domain, later
 
-## Known issue: `netlify build` fails on Windows
+When `gopicadera.com` is connected:
 
-Running `netlify build` locally on Windows fails while bundling the edge
-function for `proxy.ts`:
+- `gopicadera.com` → storefront
+- `admin.gopicadera.com` → this console
 
-```
-Cannot find module './webpack-runtime.js'
-file:///Users/.../GoPicadera/admin/C:/Users/.../GoPicadera/admin/.netlify/...
-```
-
-Look at that path: a Unix-style base with a Windows drive letter glued onto the
-middle of it. Netlify's edge bundler joins paths in a way that does not survive
-a `C:\` prefix. It is not a problem with this app — the same failure appears
-with both bundlers (`--webpack` and the default Turbopack), only the missing
-runtime filename changes, and the file it cannot find is sitting right next to
-the one that asked for it.
-
-Netlify's own build machines run Linux, where that join is correct. So a real
-deploy is the meaningful test; the local command is not.
-
-**If the deploy does fail the same way**, nothing becomes insecure — proxy.ts
-is convenience only. Every page calls `requireStaff()`/`requireOwner()` for
-itself and RLS enforces in Postgres. The symptom would be a signed-out visitor
-seeing an error instead of a clean redirect to `/login`.
+At that point set `BASE_PATH` in `next.config.ts` back to `""` — the repo-name
+prefix only exists because the site is served from a subpath.
 
 ## Before handing the link over
 
-- [ ] Signing in as a staff account shows no owner-only nav items
-- [ ] A staff account gets an error, not a silent success, on a price change
-- [ ] `admin.gopicadera.com/robots.txt` returns `Disallow: /`
+- [ ] Staff account sees no owner-only nav items
+- [ ] Staff account gets an **error** on a price change, not a silent success
+- [ ] `/gopicadera-console/robots.txt` returns `Disallow: /`
 - [ ] The storefront link still works and is unchanged
-- [ ] Searching the site for the restaurant name never surfaces the console
+- [ ] The logo renders on the login page (it needs the base-path prefix by hand)

@@ -1,7 +1,7 @@
 /**
  * Browser-side Supabase client.
  *
- * Kept in its own module on purpose: the server client imports `next/headers`,
+ * Kept in its own module on purpose: the console once had a server client that imported `next/headers`,
  * and if the two live together that import gets pulled into the client bundle
  * and the build fails. Client components import from here, only.
  *

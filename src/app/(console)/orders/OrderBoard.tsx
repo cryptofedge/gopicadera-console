@@ -9,7 +9,7 @@
  */
 import { useEffect, useState } from "react";
 import { browserClient } from "@/lib/supabase-browser";
-import type { Role } from "@/lib/auth";
+import type { Role } from "@/lib/session";
 
 export type Order = {
   id: string;
