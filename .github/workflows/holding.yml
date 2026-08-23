@@ -1,11 +1,15 @@
-name: Publish the holding page
+name: Publish holding page + demo
 
-# Publishes holding/ to the console URL. For showing the client progress before
-# the Supabase key exists — the real deploy.yml refuses to build without it.
+# Publishes two things to the Pages site:
+#   /            the "en construcción" page for the client
+#   /demo/       the console running on sample data, with test logins
 #
-# Both workflows publish to the same Pages site, so whichever ran last is what
-# is live. Running deploy.yml successfully replaces this page with the console.
+# The demo build needs no Supabase key — NEXT_PUBLIC_DEMO=1 swaps the Supabase
+# client for an in-memory stand-in — so this ships while the real project is
+# still being wired up. deploy.yml replaces all of it once the key exists.
 on:
+  push:
+    branches: [master]
   workflow_dispatch:
 
 permissions:
@@ -18,16 +22,47 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Build the demo
+        run: npm run build
+        env:
+          NEXT_PUBLIC_DEMO: "1"
+          NEXT_BASE_PATH: /gopicadera-console/demo
+          # Unused in demo mode, but the Supabase client is still constructed
+          # at import time, so it needs something syntactically valid.
+          NEXT_PUBLIC_SUPABASE_URL: https://demo.invalid
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: demo
+
+      - name: Assemble the site
+        run: |
+          mkdir -p publish
+          cp -r holding/. publish/
+          cp -r out publish/demo
+          touch publish/.nojekyll publish/demo/.nojekyll
+          test -f publish/index.html      || { echo "::error::holding page missing"; exit 1; }
+          test -f publish/demo/login/index.html || { echo "::error::demo login page missing"; exit 1; }
+          echo "published tree:"; find publish -maxdepth 2 -type d | sort
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: publish
+
   deploy:
+    needs: build
     runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: holding
       - id: deployment
         uses: actions/deploy-pages@v4

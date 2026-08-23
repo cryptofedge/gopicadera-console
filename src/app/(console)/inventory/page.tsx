@@ -11,7 +11,7 @@ function Inventory() {
   const params = useSearchParams();
   const tab = params.get("kind") === "product" ? "product" : "ingredient";
 
-  const { data, loading, error } = useQuery<Level[]>(
+  const { data, loading, error, reload } = useQuery<Level[]>(
     (sb) =>
       sb
         .from("inventory_levels")
@@ -24,7 +24,7 @@ function Inventory() {
   if (loading) return <p style={{ color: "var(--faint)" }}>Cargando inventario…</p>;
   if (error) return <p style={{ color: "var(--red)" }}>{error}</p>;
 
-  return <InventoryTable rows={data ?? []} tab={tab} role={profile!.role} />;
+  return <InventoryTable rows={data ?? []} onChanged={reload} tab={tab} role={profile!.role} />;
 }
 
 // useSearchParams needs a Suspense boundary above it, otherwise it opts the

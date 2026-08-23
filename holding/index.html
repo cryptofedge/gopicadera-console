@@ -85,6 +85,15 @@
           text-transform:uppercase; letter-spacing:.07em; color:var(--green) }
   .state.wip{ color:var(--faint) }
 
+  .cta{
+    display:block; text-decoration:none; text-align:center;
+    background:var(--yellow); color:#0A0B0E;
+    font-weight:800; font-size:16px; padding:15px 24px;
+    border-radius:999px; margin-bottom:10px;
+  }
+  .cta:hover{ filter:brightness(1.07) }
+  .cta-note{ color:var(--faint); font-size:12px; margin:0 0 26px; text-align:center }
+
   .foot{ color:var(--faint); font-size:12.5px; line-height:1.7; margin:0;
          border-top:1px solid var(--line); padding-top:20px }
   .foot strong{ color:var(--muted); font-weight:600 }
@@ -148,6 +157,9 @@
         Bot de WhatsApp <span class="state wip">En curso</span>
       </li>
     </ul>
+
+    <a class="cta" href="./demo/login/">Ver la demostración</a>
+    <p class="cta-note">Con cuentas de prueba para dueño y personal.</p>
 
     <p class="foot">
       Esta es el área privada para <strong>el dueño y el personal</strong>.

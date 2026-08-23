@@ -71,5 +71,5 @@ export default function StaffPage() {
   if (loading) return <p style={{ color: "var(--faint)" }}>Cargando equipo…</p>;
   if (error) return <p style={{ color: "var(--red)" }}>{error}</p>;
 
-  return <StaffTable rows={data ?? []} invite={invite} />;
+  return <StaffTable rows={data ?? []} onChanged={reload} invite={invite} />;
 }

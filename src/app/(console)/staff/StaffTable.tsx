@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { browserClient } from "@/lib/supabase-browser";
 
 export type Member = {
@@ -15,15 +14,18 @@ export type Member = {
 export default function StaffTable({
   rows,
   invite,
+  onChanged,
 }: {
   rows: Member[];
+  // router.refresh() re-ran the server component. There is no server now,
+  // so the page hands down its own refetch.
+  onChanged: () => void;
   // Returns an error message, or null on success. Account creation now happens
   // in the browser against Supabase, so failures (duplicate email, weak
   // password, confirmation required) have to surface here rather than being
   // swallowed by a server action.
   invite: (fd: FormData) => Promise<string | null>;
 }) {
-  const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   const [inviteError, setInviteError] = useState<string | null>(null);
@@ -42,7 +44,7 @@ export default function StaffTable({
     const { error } = await sb.from("profiles").update({ active }).eq("id", m.id);
     setBusy(null);
     if (error) { alert("No se pudo actualizar la cuenta."); return; }
-    router.refresh();
+    onChanged();
   }
 
   async function setRole(m: Member, role: "owner" | "staff") {
@@ -55,7 +57,7 @@ export default function StaffTable({
     const { error } = await sb.from("profiles").update({ role }).eq("id", m.id);
     setBusy(null);
     if (error) { alert("No se pudo cambiar el rol."); return; }
-    router.refresh();
+    onChanged();
   }
 
   const field = {

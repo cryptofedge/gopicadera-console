@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { browserClient } from "@/lib/supabase-browser";
+import { browserClient, IS_DEMO } from "@/lib/supabase-browser";
+import { DEMO_USERS } from "@/lib/demo-data";
 
 export default function LoginForm({ next }: { next: string }) {
   const router = useRouter();
@@ -116,6 +117,47 @@ export default function LoginForm({ next }: { next: string }) {
         >
           {busy ? "Entrando…" : "Entrar"}
         </button>
+
+        {/* Demo build only. Handing the client a login screen with no way in
+            would be a poor demo, so the two sample accounts are on the page —
+            one click each, no typing. */}
+        {IS_DEMO && (
+          <div
+            className="mt-7 pt-5 border-t text-left"
+            style={{ borderColor: "var(--line)" }}
+          >
+            <p
+              className="text-[11px] font-bold uppercase tracking-wider mb-3"
+              style={{ color: "var(--yellow)" }}
+            >
+              Demostración · cuentas de prueba
+            </p>
+
+            {DEMO_USERS.map((u) => (
+              <button
+                key={u.id}
+                type="button"
+                onClick={() => {
+                  setEmail(u.email);
+                  setPassword(u.password);
+                }}
+                className="w-full text-left px-3 py-2.5 rounded-xl border mb-2 transition-colors"
+                style={{ background: "var(--ink)", borderColor: "var(--line)" }}
+              >
+                <span className="block text-sm font-bold">{u.full_name}</span>
+                <span className="block text-xs nums" style={{ color: "var(--faint)" }}>
+                  {u.email} · {u.password}
+                </span>
+              </button>
+            ))}
+
+            <p className="text-xs mt-3" style={{ color: "var(--faint)" }}>
+              Toca una cuenta para rellenar los datos. Los pedidos, el inventario
+              y los precios son de ejemplo: puedes cambiar lo que quieras, y todo
+              vuelve a su sitio al recargar la página.
+            </p>
+          </div>
+        )}
       </form>
     </div>
   );

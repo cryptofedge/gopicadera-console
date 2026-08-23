@@ -8,7 +8,6 @@
  * only deciding what to show, never what is permitted.
  */
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { browserClient } from "@/lib/supabase-browser";
 import type { Role } from "@/lib/session";
 
@@ -27,8 +26,13 @@ export type Dish = {
 const money = (n: number | null) =>
   n === null || n === undefined ? "—" : "$" + Number(n).toFixed(2);
 
-export default function MenuTable({ rows, role }: { rows: Dish[]; role: Role }) {
-  const router = useRouter();
+export default function MenuTable({
+  rows, role, onChanged,
+}: {
+  rows: Dish[];
+  role: Role;
+  onChanged: () => void;
+}) {
   const owner = role === "owner";
   const [busy, setBusy] = useState<string | null>(null);
   const [q, setQ] = useState("");
@@ -42,7 +46,7 @@ export default function MenuTable({ rows, role }: { rows: Dish[]; role: Role }) 
       .eq("id", d.id);
     setBusy(null);
     if (error) { alert("No se pudo cambiar la disponibilidad."); return; }
-    router.refresh();
+    onChanged();
   }
 
   async function editPrice(d: Dish) {
@@ -62,7 +66,7 @@ export default function MenuTable({ rows, role }: { rows: Dish[]; role: Role }) 
     const { error } = await sb.from("products").update({ price: value }).eq("id", d.id);
     setBusy(null);
     if (error) { alert("No se pudo guardar el precio."); return; }
-    router.refresh();
+    onChanged();
   }
 
   const filtered = q

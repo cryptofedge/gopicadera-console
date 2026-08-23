@@ -12,7 +12,9 @@ import type { NextConfig } from "next";
 // The site lives at cryptofedge.github.io/gopicadera-console, not at a domain
 // root, so every asset and link needs the repo name in front of it. Set this to
 // "" when the console moves to admin.gopicadera.com — one edit, one place.
-const BASE_PATH = "/gopicadera-console";
+// The demo build overrides this to "/gopicadera-console/demo" so it can sit
+// alongside the holding page instead of replacing it.
+const BASE_PATH = process.env.NEXT_BASE_PATH ?? "/gopicadera-console";
 
 const nextConfig: NextConfig = {
   output: "export",

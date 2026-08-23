@@ -13,7 +13,6 @@
  */
 import { useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { browserClient } from "@/lib/supabase-browser";
 import type { Role } from "@/lib/session";
 
@@ -30,9 +29,15 @@ export type Level = {
 };
 
 export default function InventoryTable({
-  rows, tab, role,
-}: { rows: Level[]; tab: "product" | "ingredient"; role: Role }) {
-  const router = useRouter();
+  rows, tab, role, onChanged,
+}: {
+  rows: Level[];
+  tab: "product" | "ingredient";
+  role: Role;
+  // router.refresh() re-ran the server component. There is no server now,
+  // so the page hands down its own refetch.
+  onChanged: () => void;
+}) {
   const [busy, setBusy] = useState<string | null>(null);
 
   /**
@@ -47,7 +52,7 @@ export default function InventoryTable({
     });
     setBusy(null);
     if (error) { alert("No se pudo guardar el movimiento."); return; }
-    router.refresh();
+    onChanged();
   }
 
   async function setCount(item: Level) {

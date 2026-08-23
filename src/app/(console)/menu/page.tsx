@@ -12,7 +12,7 @@ import MenuTable, { type Dish } from "./MenuTable";
 export default function MenuPage() {
   const { profile } = useSession();
 
-  const { data, loading, error } = useQuery<Dish[]>(
+  const { data, loading, error, reload } = useQuery<Dish[]>(
     (sb) =>
       sb
         .from("products")
@@ -25,5 +25,5 @@ export default function MenuPage() {
   if (loading) return <p style={{ color: "var(--faint)" }}>Cargando menú…</p>;
   if (error) return <p style={{ color: "var(--red)" }}>{error}</p>;
 
-  return <MenuTable rows={data ?? []} role={profile!.role} />;
+  return <MenuTable rows={data ?? []} onChanged={reload} role={profile!.role} />;
 }
