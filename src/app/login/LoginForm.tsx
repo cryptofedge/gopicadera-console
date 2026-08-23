@@ -12,13 +12,12 @@ export default function LoginForm({ next }: { next: string }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
+  async function signIn(mail: string, pass: string) {
     setBusy(true);
     setError("");
 
     const sb = browserClient();
-    const { error } = await sb.auth.signInWithPassword({ email, password });
+    const { error } = await sb.auth.signInWithPassword({ email: mail, password: pass });
     if (error) {
       // Deliberately vague: saying which half was wrong tells an attacker
       // which email addresses have accounts here.
@@ -27,7 +26,11 @@ export default function LoginForm({ next }: { next: string }) {
       return;
     }
     router.push(next);
-    router.refresh();
+  }
+
+  function submit(e: React.FormEvent) {
+    e.preventDefault();
+    void signIn(email, password);
   }
 
   const field = {
@@ -63,6 +66,49 @@ export default function LoginForm({ next }: { next: string }) {
         <p className="text-sm mb-8" style={{ color: "var(--muted)" }}>
           Consola de pedidos e inventario
         </p>
+
+        {/* Demo build only, and deliberately ABOVE the fields: below them it
+            sat past the fold on a phone, so people met an empty form with no
+            hint that they were not expected to type anything. */}
+        {IS_DEMO && (
+          <div
+            className="mb-7 pb-6 border-b text-left"
+            style={{ borderColor: "var(--line)" }}
+          >
+            <p
+              className="text-[11px] font-bold uppercase tracking-wider mb-3"
+              style={{ color: "var(--yellow)" }}
+            >
+              Demostración · toca una cuenta para entrar
+            </p>
+
+            {DEMO_USERS.map((u) => (
+              <button
+                key={u.id}
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  // Fill the fields as well, so it is obvious what was used.
+                  setEmail(u.email);
+                  setPassword(u.password);
+                  void signIn(u.email, u.password);
+                }}
+                className="w-full text-left px-3 py-2.5 rounded-xl border mb-2 transition-colors disabled:opacity-50"
+                style={{ background: "var(--ink)", borderColor: "var(--line)" }}
+              >
+                <span className="block text-sm font-bold">{u.full_name}</span>
+                <span className="block text-xs nums" style={{ color: "var(--faint)" }}>
+                  {u.email} · {u.password}
+                </span>
+              </button>
+            ))}
+
+            <p className="text-xs mt-3" style={{ color: "var(--faint)" }}>
+              Los pedidos, el inventario y los precios son de ejemplo. Puedes
+              cambiar lo que quieras: todo vuelve a su sitio al recargar.
+            </p>
+          </div>
+        )}
 
         {/* Fields stay left-aligned inside the centred card — centred labels
             above left-aligned text inputs reads as a mistake. */}
@@ -118,46 +164,6 @@ export default function LoginForm({ next }: { next: string }) {
           {busy ? "Entrando…" : "Entrar"}
         </button>
 
-        {/* Demo build only. Handing the client a login screen with no way in
-            would be a poor demo, so the two sample accounts are on the page —
-            one click each, no typing. */}
-        {IS_DEMO && (
-          <div
-            className="mt-7 pt-5 border-t text-left"
-            style={{ borderColor: "var(--line)" }}
-          >
-            <p
-              className="text-[11px] font-bold uppercase tracking-wider mb-3"
-              style={{ color: "var(--yellow)" }}
-            >
-              Demostración · cuentas de prueba
-            </p>
-
-            {DEMO_USERS.map((u) => (
-              <button
-                key={u.id}
-                type="button"
-                onClick={() => {
-                  setEmail(u.email);
-                  setPassword(u.password);
-                }}
-                className="w-full text-left px-3 py-2.5 rounded-xl border mb-2 transition-colors"
-                style={{ background: "var(--ink)", borderColor: "var(--line)" }}
-              >
-                <span className="block text-sm font-bold">{u.full_name}</span>
-                <span className="block text-xs nums" style={{ color: "var(--faint)" }}>
-                  {u.email} · {u.password}
-                </span>
-              </button>
-            ))}
-
-            <p className="text-xs mt-3" style={{ color: "var(--faint)" }}>
-              Toca una cuenta para rellenar los datos. Los pedidos, el inventario
-              y los precios son de ejemplo: puedes cambiar lo que quieras, y todo
-              vuelve a su sitio al recargar la página.
-            </p>
-          </div>
-        )}
       </form>
     </div>
   );
