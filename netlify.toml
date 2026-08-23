@@ -1,0 +1,21 @@
+# Console deploy config. The storefront is NOT built from here — it is a static
+# file served from GitHub Pages and is untouched by anything in this folder.
+
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+# Runs the app as server-rendered Next.js rather than trying to flatten it to
+# static files. Required: this app cannot be statically exported (server-side
+# Supabase queries, session refresh in proxy.ts, and a service_role key that
+# must never reach a browser).
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+
+# Belt and braces with the noindex in the root layout metadata. A staff console
+# has no business in a search result for the restaurant.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Robots-Tag = "noindex, nofollow"
+

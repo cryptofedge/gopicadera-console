@@ -38,6 +38,11 @@ yarn-error.log*
 # vercel
 .vercel
 
+# netlify
+.netlify
+# dropped by the edge-function bundler, which runs on Deno
+deno.lock
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
