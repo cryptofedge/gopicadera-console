@@ -1,0 +1,102 @@
+import { requireOwner } from "@/lib/auth";
+import { serverClient } from "@/lib/supabase";
+
+export const dynamic = "force-dynamic";
+
+const money = (n: number) => "$" + Number(n ?? 0).toFixed(2);
+
+function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <div className="rounded-xl border p-4"
+         style={{ background: "var(--surface)", borderColor: "var(--line)" }}>
+      <div className="text-xs font-semibold uppercase tracking-wider mb-1"
+           style={{ color: "var(--faint)" }}>{label}</div>
+      <div className="text-2xl font-black nums" style={{ color: "var(--yellow)" }}>{value}</div>
+      {sub && <div className="text-xs mt-1" style={{ color: "var(--muted)" }}>{sub}</div>}
+    </div>
+  );
+}
+
+export default async function ReportsPage() {
+  await requireOwner();
+  const sb = await serverClient();
+
+  const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
+  const weekAgo = new Date(Date.now() - 7 * 864e5);
+
+  // Only completed orders count as revenue. Counting tickets still in the queue
+  // would make the number drift every time someone cancels.
+  const { data: week } = await sb
+    .from("orders")
+    .select("total, status, source, created_at, order_items(name, qty)")
+    .eq("status", "done")
+    .gte("created_at", weekAgo.toISOString());
+
+  const rows = week ?? [];
+  const today = rows.filter((o) => new Date(o.created_at) >= startOfDay);
+
+  const sum = (a: typeof rows) => a.reduce((t, o) => t + Number(o.total ?? 0), 0);
+  const avg = (a: typeof rows) => (a.length ? sum(a) / a.length : 0);
+
+  // Best sellers by quantity actually sold, not by what we featured.
+  const counts = new Map<string, number>();
+  rows.forEach((o) =>
+    (o.order_items ?? []).forEach((it: { name: string; qty: number }) =>
+      counts.set(it.name, (counts.get(it.name) ?? 0) + Number(it.qty ?? 0)),
+    ),
+  );
+  const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
+
+  const bySource = rows.reduce<Record<string, number>>((acc, o) => {
+    acc[o.source] = (acc[o.source] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  return (
+    <>
+      <h1 className="text-xl font-black mb-3">Reportes</h1>
+
+      <div className="grid gap-3 mb-6"
+           style={{ gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))" }}>
+        <Stat label="Hoy" value={money(sum(today))} sub={`${today.length} pedidos`} />
+        <Stat label="7 días" value={money(sum(rows))} sub={`${rows.length} pedidos`} />
+        <Stat label="Ticket promedio" value={money(avg(rows))} sub="últimos 7 días" />
+        <Stat
+          label="Canales"
+          value={String(Object.keys(bySource).length)}
+          sub={Object.entries(bySource).map(([k, v]) => `${k} ${v}`).join(" · ") || "—"}
+        />
+      </div>
+
+      <h2 className="text-xs font-bold uppercase tracking-wider mb-2 pb-1 border-b"
+          style={{ color: "var(--muted)", borderColor: "var(--line)" }}>
+        Más vendidos · 7 días
+      </h2>
+
+      <div className="rounded-xl border overflow-hidden"
+           style={{ borderColor: "var(--line)", background: "var(--surface)" }}>
+        <table className="w-full text-sm">
+          <tbody>
+            {top.length === 0 && (
+              <tr><td className="px-3 py-8 text-center" style={{ color: "var(--faint)" }}>
+                Todavía no hay pedidos completados.
+              </td></tr>
+            )}
+            {top.map(([name, qty], i) => (
+              <tr key={name} className="border-b last:border-0" style={{ borderColor: "var(--line)" }}>
+                <td className="px-3 py-2 w-8 nums" style={{ color: "var(--faint)" }}>{i + 1}</td>
+                <td className="px-3 py-2">{name}</td>
+                <td className="px-3 py-2 text-right nums font-bold">{qty}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <p className="mt-3 text-xs" style={{ color: "var(--faint)" }}>
+        Solo cuentan los pedidos entregados. Los precios son los del momento de
+        la venta, así que subir un precio hoy no cambia los reportes de ayer.
+      </p>
+    </>
+  );
+}

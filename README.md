@@ -1,36 +1,48 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Go Picadera — staff console
 
-## Getting Started
+Owner and staff back office for the restaurant: live order board, inventory,
+menu, staff accounts, reports.
 
-First, run the development server:
+Separate from the customer storefront on purpose. The storefront is a single
+static HTML file served from GitHub Pages; this is a Next.js app that needs a
+Node server, so the two are deployed independently and share only the Supabase
+project behind them.
+
+## The one rule
+
+**Permissions are enforced by Postgres Row Level Security, never by this UI.**
+
+A staff account must be unable to change a price even by crafting the HTTP
+request by hand. React only decides what to *show* — hiding a button is a
+courtesy, not a control. If you add a feature, add the policy first.
+
+Role split, in short: staff act on today (orders, stock counts, sold-out
+toggles, loyalty redemption), the owner changes the business (prices, menu,
+photos, hours, staff accounts, reports).
+
+## Running it
 
 ```bash
+npm install
+cp .env.example .env.local   # then fill in the values
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Without a real Supabase key the app builds and renders, but every login is
+rejected. That is expected, not a bug.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Layout
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| Path | What it is |
+| --- | --- |
+| `src/proxy.ts` | Session refresh + signed-out redirect. Convenience, not security. |
+| `src/lib/supabase.ts` | Server clients. `serverClient()` is RLS-bound; `adminClient()` bypasses RLS and is `server-only`. |
+| `src/lib/supabase-browser.ts` | Browser client. Kept in its own file so `next/headers` never reaches the client bundle. |
+| `src/lib/auth.ts` | `requireStaff()` / `requireOwner()`. Every page calls one for itself. |
+| `src/app/(console)/` | The signed-in console. |
 
-## Learn More
+Schema and policies live in `../backend/schema.sql`.
 
-To learn more about Next.js, take a look at the following resources:
+## Deploying
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+See [DEPLOY.md](DEPLOY.md).

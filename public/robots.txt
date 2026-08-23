@@ -1,0 +1,6 @@
+# Staff console. Nothing here should ever appear in a search result for the
+# restaurant. The pages also send X-Robots noindex via the root layout metadata;
+# this file is the belt to that pair of braces, for crawlers that fetch
+# robots.txt before ever requesting a page.
+User-agent: *
+Disallow: /

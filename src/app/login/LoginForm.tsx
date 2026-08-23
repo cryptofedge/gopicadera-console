@@ -1,0 +1,120 @@
+"use client";
+
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { browserClient } from "@/lib/supabase-browser";
+
+export default function LoginForm({ next }: { next: string }) {
+  const router = useRouter();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+
+    const sb = browserClient();
+    const { error } = await sb.auth.signInWithPassword({ email, password });
+    if (error) {
+      // Deliberately vague: saying which half was wrong tells an attacker
+      // which email addresses have accounts here.
+      setError("Correo o contraseña incorrectos.");
+      setBusy(false);
+      return;
+    }
+    router.push(next);
+    router.refresh();
+  }
+
+  const field = {
+    background: "var(--ink)",
+    borderColor: "var(--line)",
+    color: "var(--text)",
+  };
+
+  return (
+    // min-h-dvh, not min-h-screen: on mobile the browser chrome makes 100vh
+    // taller than the visible area, which pushes the card off centre.
+    <div className="min-h-dvh flex items-center justify-center p-6">
+      <form
+        onSubmit={submit}
+        className="w-full max-w-md rounded-2xl p-8 sm:p-10 border text-center"
+        style={{ background: "var(--surface)", borderColor: "var(--line)" }}
+      >
+        {/* The badge earns its space here — a login screen is the one place
+            with room for the full mark at a size where it actually reads. */}
+        <img
+          src="/logo.png"
+          alt="Go Picadera"
+          width={455}
+          height={420}
+          className="mx-auto mb-5 h-24 w-auto"
+        />
+
+        <div className="font-black text-3xl tracking-tight mb-1">
+          <span style={{ color: "var(--ember)" }}>GO</span>PICADERA
+        </div>
+        <p className="text-sm mb-8" style={{ color: "var(--muted)" }}>
+          Consola de pedidos e inventario
+        </p>
+
+        {/* Fields stay left-aligned inside the centred card — centred labels
+            above left-aligned text inputs reads as a mistake. */}
+        <div className="text-left">
+          <label
+            htmlFor="email"
+            className="block text-xs font-semibold uppercase tracking-wider mb-1.5"
+            style={{ color: "var(--faint)" }}
+          >
+            Correo
+          </label>
+          <input
+            id="email"
+            type="email"
+            value={email}
+            required
+            autoComplete="username"
+            onChange={(e) => setEmail(e.target.value)}
+            className="w-full mb-5 px-4 py-3 rounded-xl border outline-none text-base"
+            style={field}
+          />
+
+          <label
+            htmlFor="password"
+            className="block text-xs font-semibold uppercase tracking-wider mb-1.5"
+            style={{ color: "var(--faint)" }}
+          >
+            Contraseña
+          </label>
+          <input
+            id="password"
+            type="password"
+            value={password}
+            required
+            autoComplete="current-password"
+            onChange={(e) => setPassword(e.target.value)}
+            className="w-full mb-6 px-4 py-3 rounded-xl border outline-none text-base"
+            style={field}
+          />
+        </div>
+
+        {error && (
+          <p className="text-sm mb-4" style={{ color: "var(--red)" }} role="alert">
+            {error}
+          </p>
+        )}
+
+        <button
+          disabled={busy}
+          className="w-full py-3 rounded-full font-bold text-base disabled:opacity-50"
+          style={{ background: "var(--yellow)", color: "#0A0B0E" }}
+        >
+          {busy ? "Entrando…" : "Entrar"}
+        </button>
+      </form>
+    </div>
+  );
+}

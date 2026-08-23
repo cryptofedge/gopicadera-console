@@ -1,26 +1,39 @@
 @import "tailwindcss";
 
+/* Console theme. Same brand as the storefront so it feels like one product,
+   but flatter and denser — this is a tool people use for eight hours, not a
+   page they admire for thirty seconds. */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --ink: #0a0b0e;
+  --surface: #131519;
+  --surface-2: #1b1e25;
+  --surface-3: #242832;
+  --line: rgba(255, 255, 255, 0.09);
+  --line-warm: rgba(255, 196, 0, 0.22);
+  --yellow: #ffc400;
+  --ember: #ff6a1a;
+  --green: #3fd07a;
+  --red: #ff5468;
+  --text: #f6f4ef;
+  --muted: #9c9ea8;
+  --faint: #6a6c76;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+html, body {
+  background: var(--ink);
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+*, *::before, *::after { box-sizing: border-box; }
+
+:focus-visible {
+  outline: 2px solid var(--yellow);
+  outline-offset: 2px;
+  border-radius: 4px;
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
-}
+/* Tabular figures wherever money or counts appear — columns of digits that
+   don't line up are genuinely harder to scan under pressure. */
+.nums { font-variant-numeric: tabular-nums; }
