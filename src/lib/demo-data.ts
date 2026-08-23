@@ -31,8 +31,8 @@ export const DEMO_USERS = [
   },
   {
     id: "demo-staff",
-    email: "personal@gopicadera.com",
-    password: "Personal2026",
+    email: "yudelka@gopicadera.com",
+    password: "Yudelka2026",
     full_name: "Yudelka (Personal)",
     role: "staff" as const,
     active: true,
