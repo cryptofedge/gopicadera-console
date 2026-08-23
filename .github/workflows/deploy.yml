@@ -31,6 +31,22 @@ jobs:
 
       - run: npm ci
 
+      # Check BEFORE building, not after. A missing secret does not become the
+      # placeholder string — it becomes an empty string, which compiles happily
+      # and then throws in the visitor's browser on the first Supabase call.
+      # The after-the-fact placeholder check below cannot see that case.
+      - name: Require real Supabase credentials
+        env:
+          SUPA_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPA_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+        run: |
+          [ -n "$SUPA_URL" ] || { echo "::error::Repository secret NEXT_PUBLIC_SUPABASE_URL is not set."; exit 1; }
+          [ -n "$SUPA_KEY" ] || { echo "::error::Repository secret NEXT_PUBLIC_SUPABASE_ANON_KEY is not set."; exit 1; }
+          case "$SUPA_KEY" in
+            eyJ*) ;;
+            *) echo "::error::NEXT_PUBLIC_SUPABASE_ANON_KEY does not look like a Supabase key (expected it to start with eyJ)."; exit 1 ;;
+          esac
+
       - run: npm run build
         env:
           # NEXT_PUBLIC_* values are compiled into the JavaScript at build time,
