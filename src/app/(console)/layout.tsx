@@ -13,7 +13,10 @@ import { useRouter, usePathname } from "next/navigation";
 import Nav from "@/components/Nav";
 import { SessionProvider, useSession } from "@/lib/session";
 
-const OWNER_ONLY = ["/menu", "/staff", "/reports", "/settings"];
+// "/inventory" itself is staff-accessible; only creating an item is not.
+// startsWith means the more specific path can be listed without catching the
+// parent route.
+const OWNER_ONLY = ["/menu", "/staff", "/reports", "/settings", "/inventory/new"];
 
 function Guard({ children }: { children: React.ReactNode }) {
   const { profile, loading } = useSession();

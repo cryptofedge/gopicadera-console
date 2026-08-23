@@ -83,8 +83,11 @@ class Query implements PromiseLike<{ data: unknown; error: null }> {
   }
 }
 
-class Mutation implements PromiseLike<{ data: null; error: null }> {
+class Mutation implements PromiseLike<{ data: unknown; error: null }> {
   private filters: Filter[] = [];
+  private returning = false;
+  private one = false;
+  private inserted: Row[] = [];
   constructor(
     private table: string,
     private kind: "update" | "insert" | "upsert",
@@ -92,6 +95,11 @@ class Mutation implements PromiseLike<{ data: null; error: null }> {
   ) {}
 
   eq(col: string, val: unknown) { this.filters.push({ col, op: "eq", val }); return this; }
+
+  // insert(...).select("id").single() — the new-item form needs the id back so
+  // it can log the opening stock count against it.
+  select() { this.returning = true; return this; }
+  single() { this.returning = true; this.one = true; return this; }
 
   private apply() {
     const list = (store[this.table] ??= []);
@@ -110,8 +118,18 @@ class Mutation implements PromiseLike<{ data: null; error: null }> {
       const existing = this.kind === "upsert"
         ? list.find((r) => r[idKey] !== undefined && r[idKey] === item[idKey])
         : undefined;
-      if (existing) Object.assign(existing, item);
-      else list.push({ id: `demo-${Math.random().toString(36).slice(2, 9)}`, ...item });
+      if (existing) { Object.assign(existing, item); this.inserted.push(existing); }
+      else {
+        const row = { id: `demo-${Math.random().toString(36).slice(2, 9)}`, ...item };
+        // A brand new inventory item starts at zero and derives its own flags,
+        // exactly as the inventory_levels view would.
+        if (this.table === "inventory_items") {
+          Object.assign(row, { qty: 0, low: Number(item.reorder_level ?? 0) > 0, out_of_stock: true });
+          (store.inventory_levels ??= []).push(row);
+        }
+        list.push(row);
+        this.inserted.push(row);
+      }
     }
 
     // A stock movement has to move the level it refers to, or the inventory
@@ -129,11 +147,15 @@ class Mutation implements PromiseLike<{ data: null; error: null }> {
   }
 
   then<R1, R2 = never>(
-    ok?: ((v: { data: null; error: null }) => R1 | PromiseLike<R1>) | null,
+    ok?: ((v: { data: unknown; error: null }) => R1 | PromiseLike<R1>) | null,
     fail?: ((r: unknown) => R2 | PromiseLike<R2>) | null,
   ): PromiseLike<R1 | R2> {
-    return new Promise<{ data: null; error: null }>((res) =>
-      setTimeout(() => { this.apply(); res({ data: null, error: null }); }, 140),
+    return new Promise<{ data: unknown; error: null }>((res) =>
+      setTimeout(() => {
+        this.apply();
+        const data = !this.returning ? null : this.one ? (this.inserted[0] ?? null) : this.inserted;
+        res({ data, error: null });
+      }, 140),
     ).then(ok, fail);
   }
 }
