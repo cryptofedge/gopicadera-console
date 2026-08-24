@@ -118,6 +118,20 @@ class Mutation implements PromiseLike<{ data: unknown; error: null }> {
         Object.assign(r, this.payload);
         if (me) r.handled_by_name = me;
       });
+
+      // Publishing is genuinely asynchronous: the bot calls the ad platform and
+      // writes back. Stand in for that round trip so "Publicando…" is a state
+      // the client sees resolve, rather than one that never changes.
+      if (this.table === "campaigns" && (this.payload as Row).status === "publishing") {
+        const target = list.find((r) => this.filters.every((f) => matches(r, f)));
+        if (target) {
+          setTimeout(() => {
+            target.status = "active";
+            target.external_id = "2385" + Math.floor(1000 + Math.random() * 8999);
+            target.synced_at = new Date().toISOString();
+          }, 2600);
+        }
+      }
       return;
     }
 
@@ -139,22 +153,6 @@ class Mutation implements PromiseLike<{ data: unknown; error: null }> {
         }
         list.push(row);
         this.inserted.push(row);
-      }
-    }
-
-    // Publishing a campaign is asynchronous for real — the bot calls the ad
-    // platform and writes back. The demo stands in for that round trip so the
-    // "Publicando…" state is something the client actually sees resolve,
-    // rather than a status that never changes.
-    if (this.table === "campaigns" && (this.payload as Row).status === "publishing") {
-      const target = list.find((r) => this.filters.every((f) => matches(r, f)));
-      if (target) {
-        setTimeout(() => {
-          target.status = "active";
-          target.external_id = "2385" + Math.floor(1000 + Math.random() * 8999);
-          target.synced_at = new Date().toISOString();
-          notify();
-        }, 2600);
       }
     }
 
