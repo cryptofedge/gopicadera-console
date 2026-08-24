@@ -13,13 +13,13 @@
  * Until then a campaign here is a draft the owner can read, edit and schedule —
  * it just cannot go live on its own.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { browserClient } from "@/lib/supabase-browser";
 import { useSession, isOwner } from "@/lib/session";
 import { useQuery } from "@/lib/useQuery";
 
 type Provider = "google_ads" | "meta_ads" | "tiktok_ads";
-type Status = "draft" | "scheduled" | "active" | "paused" | "ended";
+type Status = "draft" | "scheduled" | "publishing" | "active" | "paused" | "ended" | "failed";
 
 const META: Record<Provider, { name: string; color: string; where: string }> = {
   meta_ads:   { name: "Meta",       color: "#0866FF", where: "Facebook e Instagram" },
@@ -30,17 +30,21 @@ const META: Record<Provider, { name: string; color: string; where: string }> = {
 const STATUS_LABEL: Record<Status, string> = {
   draft: "Borrador",
   scheduled: "Programada",
+  publishing: "Publicando…",
   active: "Activa",
   paused: "En pausa",
   ended: "Terminada",
+  failed: "No se pudo publicar",
 };
 
 const STATUS_COLOR: Record<Status, string> = {
   draft: "var(--faint)",
   scheduled: "var(--yellow)",
+  publishing: "var(--yellow)",
   active: "var(--green)",
   paused: "var(--ember)",
   ended: "var(--faint)",
+  failed: "var(--red)",
 };
 
 type Campaign = {
@@ -57,6 +61,9 @@ type Campaign = {
   orders: number;
   starts_at: string | null;
   ends_at: string | null;
+  external_id: string | null;
+  last_error: string | null;
+  synced_at: string | null;
 };
 
 const money = (n: number) => "$" + Number(n ?? 0).toFixed(2);
@@ -77,7 +84,7 @@ export default function PromoPage() {
       sb
         .from("campaigns")
         .select(
-          "id, provider, name, status, headline, body, daily_budget, spend, impressions, clicks, orders, starts_at, ends_at",
+          "id, provider, name, status, headline, body, daily_budget, spend, impressions, clicks, orders, starts_at, ends_at, external_id, last_error, synced_at",
         )
         .order("created_at", { ascending: false }) as never,
   );
@@ -85,11 +92,38 @@ export default function PromoPage() {
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
 
+  // A campaign sitting in "publishing" is waiting on the bot, which will finish
+  // out of band. Poll while any of them are, and stop once none are.
+  const publishing = (data ?? []).some((c) => c.status === "publishing");
+  useEffect(() => {
+    if (!publishing) return;
+    const t = setInterval(reload, 2000);
+    return () => clearInterval(t);
+  }, [publishing, reload]);
+
+  /**
+   * Launching goes through "publishing", not straight to "active".
+   *
+   * The console cannot call Meta or Google itself, so this only records the
+   * intent — a database trigger queues the job and the bot does the work.
+   * Jumping to "active" would tell the owner the ad is running before anything
+   * has been published, and be a lie for as long as the platform took to
+   * answer, or forever if it refused.
+   */
   async function setStatus(c: Campaign, status: Status) {
     setBusy(true);
-    await browserClient().from("campaigns").update({ status }).eq("id", c.id);
+    await browserClient()
+      .from("campaigns")
+      .update({ status, last_error: null })
+      .eq("id", c.id);
     setBusy(false);
     reload();
+  }
+
+  async function launch(c: Campaign) {
+    // Resuming something already on the platform goes straight back to active;
+    // a first launch has to be created there first.
+    await setStatus(c, c.external_id ? "active" : "publishing");
   }
 
   async function create(fd: FormData) {
@@ -201,6 +235,18 @@ export default function PromoPage() {
                 {m?.name} · {m?.where} · {money(c.daily_budget)}/día
               </p>
 
+              {c.status === "publishing" && (
+                <p className="text-xs mb-2" style={{ color: "var(--yellow)" }}>
+                  Enviando a {m?.name}. Tarda un momento; la pantalla se
+                  actualiza sola cuando confirme.
+                </p>
+              )}
+              {c.status === "failed" && c.last_error && (
+                <p className="text-xs mb-2" style={{ color: "var(--red)" }} role="alert">
+                  {c.last_error}
+                </p>
+              )}
+
               {c.headline && <p className="text-sm font-bold mb-1">{c.headline}</p>}
               {c.body && (
                 <p className="text-xs mb-3" style={{ color: "var(--muted)" }}>{c.body}</p>
@@ -229,11 +275,11 @@ export default function PromoPage() {
 
               {owner && (
                 <div className="flex gap-2 flex-wrap">
-                  {c.status !== "active" && (
-                    <button onClick={() => setStatus(c, "active")} disabled={busy}
+                  {c.status !== "active" && c.status !== "publishing" && (
+                    <button onClick={() => launch(c)} disabled={busy}
                             className="px-3 py-1.5 rounded-full text-xs font-bold disabled:opacity-50"
                             style={{ background: "var(--yellow)", color: "#0A0B0E" }}>
-                      Activar
+                      {c.status === "paused" ? "Reanudar" : c.status === "failed" ? "Reintentar" : "Publicar ahora"}
                     </button>
                   )}
                   {c.status === "active" && (
@@ -243,7 +289,14 @@ export default function PromoPage() {
                       Pausar
                     </button>
                   )}
-                  {c.status !== "ended" && (
+                  {c.external_id && (
+                    <button onClick={() => setStatus(c, c.status)} disabled={busy}
+                            className="px-3 py-1.5 rounded-full text-xs font-bold disabled:opacity-50"
+                            style={{ background: "var(--surface-3)", color: "var(--muted)" }}>
+                      Actualizar cifras
+                    </button>
+                  )}
+                  {c.status !== "ended" && c.status !== "publishing" && (
                     <button onClick={() => setStatus(c, "ended")} disabled={busy}
                             className="px-3 py-1.5 rounded-full text-xs font-bold disabled:opacity-50"
                             style={{ background: "var(--surface-3)", color: "var(--muted)" }}>

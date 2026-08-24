@@ -151,21 +151,26 @@ export const seed = {
     { kind: "pos", provider: "lightspeed", status: "disconnected", store_id: null,         client_id: null,         has_secret: false, last_order_at: null,        last_error: null, auto_accept: false },
   ] as Record<string, unknown>[],
 
+  campaign_jobs: [] as Record<string, unknown>[],
+
   campaigns: [
     { id: "cp1", provider: "meta_ads", name: "Fin de semana · Mofongo", status: "active",
       headline: "Mofongo con pernil, $14 este fin de semana",
       body: "Hecho al momento en la 4ta Avenida. Pide por WhatsApp o pasa por la tienda.",
       daily_budget: 15, spend: 84.2, impressions: 18420, clicks: 612, orders: 23,
+      external_id: "23851174", last_error: null, synced_at: minsAgo(52),
       starts_at: daysAgo(6), ends_at: null, created_at: daysAgo(6) },
     { id: "cp2", provider: "meta_ads", name: "Empanadas 2x1 · martes", status: "paused",
       headline: "Martes de empanadas: 2x1 todo el día",
       body: "Pollo, carne o queso. Solo los martes.",
       daily_budget: 8, spend: 41.6, impressions: 9130, clicks: 288, orders: 11,
+      external_id: "23849902", last_error: null, synced_at: minsAgo(240),
       starts_at: daysAgo(14), ends_at: daysAgo(2), created_at: daysAgo(14) },
     { id: "cp3", provider: "google_ads", name: "Búsqueda · comida dominicana Brooklyn", status: "draft",
       headline: "Comida dominicana en Sunset Park",
       body: "Pernil, mofongo, chicharrón. Abierto hasta las 11pm.",
       daily_budget: 12, spend: 0, impressions: 0, clicks: 0, orders: 0,
+      external_id: null, last_error: null, synced_at: null,
       starts_at: null, ends_at: null, created_at: daysAgo(1) },
   ] as Record<string, unknown>[],
 

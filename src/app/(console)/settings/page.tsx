@@ -15,7 +15,7 @@ type Usage = {
 const usd = (n: number) => "$" + Number(n ?? 0).toFixed(2);
 
 /**
- * What the assistant costs to run this month.
+ * What the GoPicadera Robot costs to run this month.
  *
  * Two things worth knowing about this number. Anthropic reports *spend*, not a
  * remaining balance — so "left" here means left against the ceiling the owner
@@ -26,7 +26,7 @@ const usd = (n: number) => "$" + Number(n ?? 0).toFixed(2);
  * would be readable by anyone who opened the page. The bot holds the key, polls
  * on a schedule, and writes the result to the database. The console only reads.
  */
-function AssistantCredit() {
+function RobotBalance() {
   const { data, loading, reload } = useQuery<Usage[]>(
     (sb) =>
       sb.from("ai_usage").select("period_start, spend_usd, budget_usd, messages, updated_at")
@@ -64,7 +64,7 @@ function AssistantCredit() {
     <div className="rounded-xl border p-4 max-w-2xl mb-5"
          style={{ background: "var(--surface)", borderColor: "var(--line)" }}>
       <h2 className="text-xs font-bold uppercase tracking-wider mb-3"
-          style={{ color: "var(--muted)" }}>Crédito del asistente</h2>
+          style={{ color: "var(--muted)" }}>Balance del Robot GoPicadera</h2>
 
       <div className="flex items-baseline gap-2 mb-2 flex-wrap">
         <span className="text-2xl font-black nums"
@@ -88,7 +88,7 @@ function AssistantCredit() {
 
       <p className="text-xs mb-4" style={{ color: tight ? "var(--ember)" : "var(--faint)" }}>
         {tight
-          ? "Queda poco. Si se acaba, el bot deja de responder por WhatsApp hasta el mes que viene."
+          ? "Queda poco. Si se acaba, el Robot deja de responder por WhatsApp hasta el mes que viene."
           : `Gastado ${usd(spend)} en lo que va del mes.`}
       </p>
 
@@ -111,8 +111,8 @@ function AssistantCredit() {
       </form>
 
       <p className="text-xs mt-3" style={{ color: "var(--faint)" }}>
-        El tope lo pones tú. El gasto lo reporta el asistente solo, una vez al
-        día — la consola nunca guarda la llave de Anthropic.
+        El tope lo pones tú. El Robot reporta su propio gasto una vez al día —
+        la consola nunca guarda la llave.
       </p>
     </div>
   );
@@ -185,7 +185,7 @@ export default function SettingsPage() {
     <>
       <h1 className="text-xl font-black mb-3">Ajustes</h1>
 
-      <AssistantCredit />
+      <RobotBalance />
 
       <form onSubmit={save}
             className="rounded-xl border p-4 max-w-2xl"
