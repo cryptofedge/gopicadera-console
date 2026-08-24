@@ -145,7 +145,32 @@ export const seed = {
     { kind: "pos", provider: "square",     status: "connected",    store_id: "SQ-BK-4820", client_id: "sq0idp-91x", has_secret: true,  last_order_at: minsAgo(23), last_error: null, auto_accept: false },
     { kind: "pos", provider: "clover",     status: "disconnected", store_id: null,         client_id: null,         has_secret: false, last_order_at: null,        last_error: null, auto_accept: false },
     { kind: "pos", provider: "toast",      status: "disconnected", store_id: null,         client_id: null,         has_secret: false, last_order_at: null,        last_error: null, auto_accept: false },
+    { kind: "ads", provider: "meta_ads",   status: "connected",    store_id: "act_88231", client_id: "meta_1120", has_secret: true,  last_order_at: minsAgo(52), last_error: null, auto_accept: false },
+    { kind: "ads", provider: "google_ads", status: "pending",      store_id: null,        client_id: null,        has_secret: false, last_order_at: null,        last_error: null, auto_accept: false },
+    { kind: "ads", provider: "tiktok_ads", status: "disconnected", store_id: null,        client_id: null,        has_secret: false, last_order_at: null,        last_error: null, auto_accept: false },
     { kind: "pos", provider: "lightspeed", status: "disconnected", store_id: null,         client_id: null,         has_secret: false, last_order_at: null,        last_error: null, auto_accept: false },
+  ] as Record<string, unknown>[],
+
+  campaigns: [
+    { id: "cp1", provider: "meta_ads", name: "Fin de semana · Mofongo", status: "active",
+      headline: "Mofongo con pernil, $14 este fin de semana",
+      body: "Hecho al momento en la 4ta Avenida. Pide por WhatsApp o pasa por la tienda.",
+      daily_budget: 15, spend: 84.2, impressions: 18420, clicks: 612, orders: 23,
+      starts_at: daysAgo(6), ends_at: null, created_at: daysAgo(6) },
+    { id: "cp2", provider: "meta_ads", name: "Empanadas 2x1 · martes", status: "paused",
+      headline: "Martes de empanadas: 2x1 todo el día",
+      body: "Pollo, carne o queso. Solo los martes.",
+      daily_budget: 8, spend: 41.6, impressions: 9130, clicks: 288, orders: 11,
+      starts_at: daysAgo(14), ends_at: daysAgo(2), created_at: daysAgo(14) },
+    { id: "cp3", provider: "google_ads", name: "Búsqueda · comida dominicana Brooklyn", status: "draft",
+      headline: "Comida dominicana en Sunset Park",
+      body: "Pernil, mofongo, chicharrón. Abierto hasta las 11pm.",
+      daily_budget: 12, spend: 0, impressions: 0, clicks: 0, orders: 0,
+      starts_at: null, ends_at: null, created_at: daysAgo(1) },
+  ] as Record<string, unknown>[],
+
+  ai_usage: [
+    { period_start: "2026-08-01", spend_usd: 12.4, budget_usd: 40, messages: 1834, updated_at: minsAgo(180) },
   ] as Record<string, unknown>[],
 
   stock_moves: [] as Record<string, unknown>[],

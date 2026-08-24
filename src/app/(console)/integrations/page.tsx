@@ -22,8 +22,9 @@ import { useQuery } from "@/lib/useQuery";
 type Provider =
   | "doordash" | "ubereats" | "grubhub"
   | "whatsapp"
-  | "square" | "clover" | "toast" | "lightspeed";
-type Kind = "delivery" | "messaging" | "pos";
+  | "square" | "clover" | "toast" | "lightspeed"
+  | "google_ads" | "meta_ads" | "tiktok_ads";
+type Kind = "delivery" | "messaging" | "pos" | "ads";
 type Status = "disconnected" | "pending" | "connected" | "error";
 
 type Row = {
@@ -97,6 +98,27 @@ const META: Record<Provider, { name: string; blurb: string; portal: string; colo
     color: "#F5344C",
     oauth: true,
   },
+
+  meta_ads: {
+    name: "Meta",
+    blurb: "Facebook e Instagram. Conecta con tu cuenta de Meta Business.",
+    portal: "business.facebook.com",
+    color: "#0866FF",
+    oauth: true,
+  },
+  google_ads: {
+    name: "Google Ads",
+    blurb: "Google exige un token de desarrollador aprobado antes de dar acceso.",
+    portal: "ads.google.com",
+    color: "#4285F4",
+  },
+  tiktok_ads: {
+    name: "TikTok",
+    blurb: "Conecta con tu cuenta de TikTok for Business.",
+    portal: "business.tiktok.com",
+    color: "#FE2C55",
+    oauth: true,
+  },
 };
 
 const SECTIONS: { kind: Kind; title: string; note: string }[] = [
@@ -109,6 +131,11 @@ const SECTIONS: { kind: Kind; title: string; note: string }[] = [
     kind: "pos",
     title: "Punto de venta",
     note: "Conecta la caja para que el menú, los precios y las ventas del mostrador cuadren con la consola. Solo se puede conectar un sistema a la vez.",
+  },
+  {
+    kind: "ads",
+    title: "Publicidad",
+    note: "Desde dónde salen los anuncios. Lo que se anuncia y con cuánto se maneja en Promoción.",
   },
   {
     kind: "messaging",

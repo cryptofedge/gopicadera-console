@@ -4,6 +4,120 @@ import { useEffect, useState } from "react";
 import { browserClient } from "@/lib/supabase-browser";
 import { useQuery } from "@/lib/useQuery";
 
+type Usage = {
+  period_start: string;
+  spend_usd: number;
+  budget_usd: number;
+  messages: number;
+  updated_at: string;
+};
+
+const usd = (n: number) => "$" + Number(n ?? 0).toFixed(2);
+
+/**
+ * What the assistant costs to run this month.
+ *
+ * Two things worth knowing about this number. Anthropic reports *spend*, not a
+ * remaining balance — so "left" here means left against the ceiling the owner
+ * sets below, not against a prepaid balance.
+ *
+ * And the figure is written by the bot, server-side. Reading it from Anthropic
+ * needs an admin key, and this console is a static site: a key placed here
+ * would be readable by anyone who opened the page. The bot holds the key, polls
+ * on a schedule, and writes the result to the database. The console only reads.
+ */
+function AssistantCredit() {
+  const { data, loading, reload } = useQuery<Usage[]>(
+    (sb) =>
+      sb.from("ai_usage").select("period_start, spend_usd, budget_usd, messages, updated_at")
+        .order("period_start", { ascending: false }) as never,
+  );
+
+  const row = (data ?? [])[0];
+  const [budget, setBudget] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (row) setBudget(String(row.budget_usd ?? 0));
+  }, [row]);
+
+  if (loading) return null;
+
+  const spend = Number(row?.spend_usd ?? 0);
+  const cap = Number(row?.budget_usd ?? 0);
+  const left = Math.max(cap - spend, 0);
+  const pct = cap > 0 ? Math.min((spend / cap) * 100, 100) : 0;
+  const tight = cap > 0 && left / cap < 0.2;
+
+  async function saveBudget(e: React.FormEvent) {
+    e.preventDefault();
+    if (!row) return;
+    setSaving(true);
+    await browserClient().from("ai_usage")
+      .update({ budget_usd: Number(budget) || 0 })
+      .eq("period_start", row.period_start);
+    setSaving(false);
+    reload();
+  }
+
+  return (
+    <div className="rounded-xl border p-4 max-w-2xl mb-5"
+         style={{ background: "var(--surface)", borderColor: "var(--line)" }}>
+      <h2 className="text-xs font-bold uppercase tracking-wider mb-3"
+          style={{ color: "var(--muted)" }}>Crédito del asistente</h2>
+
+      <div className="flex items-baseline gap-2 mb-2 flex-wrap">
+        <span className="text-2xl font-black nums"
+              style={{ color: tight ? "var(--ember)" : "var(--yellow)" }}>
+          {usd(left)}
+        </span>
+        <span className="text-sm" style={{ color: "var(--muted)" }}>
+          disponible de {usd(cap)} este mes
+        </span>
+        {row && (
+          <span className="ml-auto text-xs nums" style={{ color: "var(--faint)" }}>
+            {row.messages.toLocaleString("es-DO")} mensajes
+          </span>
+        )}
+      </div>
+
+      <div className="h-2 rounded-full overflow-hidden mb-2" style={{ background: "var(--surface-2)" }}>
+        <div className="h-full rounded-full"
+             style={{ width: `${pct}%`, background: tight ? "var(--ember)" : "var(--green)" }} />
+      </div>
+
+      <p className="text-xs mb-4" style={{ color: tight ? "var(--ember)" : "var(--faint)" }}>
+        {tight
+          ? "Queda poco. Si se acaba, el bot deja de responder por WhatsApp hasta el mes que viene."
+          : `Gastado ${usd(spend)} en lo que va del mes.`}
+      </p>
+
+      <form onSubmit={saveBudget} className="flex items-end gap-2 flex-wrap">
+        <div>
+          <label htmlFor="budget" className="block text-xs font-bold uppercase tracking-wider mb-1.5"
+                 style={{ color: "var(--muted)" }}>
+            Tope mensual
+          </label>
+          <input id="budget" type="number" min={0} step="1" value={budget}
+                 onChange={(e) => setBudget(e.target.value)}
+                 className="w-32 px-3 py-2 rounded-lg border outline-none nums"
+                 style={{ background: "var(--ink)", borderColor: "var(--line)", color: "var(--text)" }} />
+        </div>
+        <button disabled={saving}
+                className="px-4 py-2 rounded-full text-sm font-bold disabled:opacity-50"
+                style={{ background: "var(--surface-3)", color: "var(--text)" }}>
+          {saving ? "Guardando…" : "Cambiar tope"}
+        </button>
+      </form>
+
+      <p className="text-xs mt-3" style={{ color: "var(--faint)" }}>
+        El tope lo pones tú. El gasto lo reporta el asistente solo, una vez al
+        día — la consola nunca guarda la llave de Anthropic.
+      </p>
+    </div>
+  );
+}
+
 const DAYS = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
 
 type Hours = { open: number; close: number }[];
@@ -70,6 +184,8 @@ export default function SettingsPage() {
   return (
     <>
       <h1 className="text-xl font-black mb-3">Ajustes</h1>
+
+      <AssistantCredit />
 
       <form onSubmit={save}
             className="rounded-xl border p-4 max-w-2xl"
