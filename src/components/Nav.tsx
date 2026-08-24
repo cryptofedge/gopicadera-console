@@ -16,6 +16,7 @@ type Item = { href: string; label: string; owner?: boolean };
 
 const ITEMS: Item[] = [
   { href: "/orders",    label: "Pedidos" },
+  { href: "/payments",  label: "Pagos" },
   { href: "/inventory", label: "Inventario" },
   { href: "/menu",      label: "Menú",       owner: true },
   { href: "/integrations", label: "Canales", owner: true },
