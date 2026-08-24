@@ -23,6 +23,10 @@ export type Order = {
   loyalty_code: string | null;
   note: string | null;
   payment?: "unpaid" | "pending" | "paid" | "refunded" | "failed";
+  // Names rather than ids: a staff member who leaves is removed from profiles,
+  // and the ticket still has to say who handled it.
+  taken_by_name?: string | null;
+  handled_by_name?: string | null;
   // Stamped when the payment-confirmation WhatsApp was queued, so the board can
   // show that the customer has already been told.
   notified_at?: string | null;
@@ -130,6 +134,14 @@ function Ticket({
           );
         })}
       </ul>
+
+      {(o.taken_by_name || o.handled_by_name) && (
+        <p className="text-xs mb-2" style={{ color: "var(--faint)" }}>
+          {o.taken_by_name && <>Tomado por {o.taken_by_name}</>}
+          {o.taken_by_name && o.handled_by_name && " · "}
+          {o.handled_by_name && <>Atendido por {o.handled_by_name}</>}
+        </p>
+      )}
 
       {o.note && (
         <p className="text-xs italic mb-2" style={{ color: "var(--ember)" }}>

@@ -105,8 +105,18 @@ class Mutation implements PromiseLike<{ data: unknown; error: null }> {
     const list = (store[this.table] ??= []);
 
     if (this.kind === "update") {
+      // Moving a ticket stamps whoever moved it, the same as the database
+      // trigger does — otherwise the demo would show the column always empty.
+      const stamping =
+        this.table === "orders" && Object.keys(this.payload).includes("status");
+      const me = stamping
+        ? DEMO_USERS.find((u) => u.id === readSession())?.full_name ?? null
+        : null;
+
       list.forEach((r) => {
-        if (this.filters.every((f) => matches(r, f))) Object.assign(r, this.payload);
+        if (!this.filters.every((f) => matches(r, f))) return;
+        Object.assign(r, this.payload);
+        if (me) r.handled_by_name = me;
       });
       return;
     }

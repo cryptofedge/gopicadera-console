@@ -47,6 +47,8 @@ type Paid = {
   paid_at: string | null;
   notified_at: string | null;
   created_at: string;
+  taken_by_name?: string | null;
+  handled_by_name?: string | null;
   order_items: { name: string; qty: number }[] | null;
 };
 
@@ -67,7 +69,7 @@ export default function PaymentsPage() {
       sb
         .from("orders")
         .select(
-          "id, code, source, customer_name, phone, mode, status, total, paid_at, notified_at, created_at, order_items(name, qty)",
+          "id, code, source, customer_name, phone, mode, status, total, paid_at, notified_at, created_at, taken_by_name, handled_by_name, order_items(name, qty)",
         )
         .eq("payment", "paid")
         .gte("created_at", new Date(Date.now() - 864e5).toISOString())
@@ -171,6 +173,12 @@ export default function PaymentsPage() {
                   </li>
                 ))}
               </ul>
+
+              {(o.handled_by_name || o.taken_by_name) && (
+                <p className="text-xs mb-1" style={{ color: "var(--faint)" }}>
+                  Atendido por {o.handled_by_name ?? o.taken_by_name}
+                </p>
+              )}
 
               <p className="text-[11px] pt-2 border-t"
                  style={{ borderColor: "var(--line)", color: o.notified_at ? "var(--faint)" : "var(--yellow)" }}>

@@ -39,6 +39,8 @@ export const DEMO_USERS = [
   },
 ];
 
+const STAFF = ["Yudelka Objío", "Luis Peña"];
+
 export const seed = {
   profiles: [
     { id: "demo-owner", full_name: "Richard", role: "owner", active: true, created_at: daysAgo(220) },
@@ -82,17 +84,17 @@ export const seed = {
   ],
 
   orders: [
-    { id: "o1", code: "GP-4821", source: "web",      customer_name: "María Fernández", phone: "9175550142", mode: "pickup",   status: "new",     payment: "paid",   paid_at: minsAgo(4),  notified_at: minsAgo(4),  total: 27.5, loyalty_code: null,        note: "Sin cebolla",       created_at: minsAgo(4),
+    { id: "o1", code: "GP-4821", source: "web", taken_by_name: null,             handled_by_name: "Yudelka Objío",      customer_name: "María Fernández", phone: "9175550142", mode: "pickup",   status: "new",     payment: "paid",   paid_at: minsAgo(4),  notified_at: minsAgo(4),  total: 27.5, loyalty_code: null,        note: "Sin cebolla",       created_at: minsAgo(4),
       order_items: [{ name: "Mofongo", qty: 1, unit_price: 14.0, options: ["Con pernil"] }, { name: "Empanadas", qty: 2, unit_price: 3.5, options: ["Pollo"] }, { name: "Morir Soñando", qty: 1, unit_price: 4.5, options: ["Sin azúcar"] }] },
-    { id: "o2", code: "GP-4822", source: "whatsapp", customer_name: "José Ramírez",    phone: "9175550198", mode: "delivery", status: "new",     payment: "paid",   paid_at: minsAgo(9),  notified_at: minsAgo(9),  total: 18.0, loyalty_code: null,        note: null,                created_at: minsAgo(9),
+    { id: "o2", code: "GP-4822", source: "whatsapp", taken_by_name: null,             handled_by_name: "Luis Peña", customer_name: "José Ramírez",    phone: "9175550198", mode: "delivery", status: "new",     payment: "paid",   paid_at: minsAgo(9),  notified_at: minsAgo(9),  total: 18.0, loyalty_code: null,        note: null,                created_at: minsAgo(9),
       order_items: [{ name: "Pernil", qty: 1, unit_price: 13.0, options: ["Con tostones"] }, { name: "Country Club", qty: 2, unit_price: 2.5, options: ["Uva"] }] },
-    { id: "o3", code: "GP-4823", source: "ubereats", customer_name: "Ana Beltré",      phone: "9175550177", mode: "delivery", status: "cooking", payment: "paid",   paid_at: minsAgo(16), notified_at: minsAgo(16), total: 41.0, loyalty_code: null,        note: "Extra picante",     created_at: minsAgo(16),
+    { id: "o3", code: "GP-4823", source: "ubereats", taken_by_name: null,             handled_by_name: "Yudelka Objío", customer_name: "Ana Beltré",      phone: "9175550177", mode: "delivery", status: "cooking", payment: "paid",   paid_at: minsAgo(16), notified_at: minsAgo(16), total: 41.0, loyalty_code: null,        note: "Extra picante",     created_at: minsAgo(16),
       order_items: [{ name: "Chicharrón de cerdo", qty: 2, unit_price: 12.0, options: [] }, { name: "Tostones", qty: 2, unit_price: 5.0, options: ["Sin sal"] }, { name: "Refresco", qty: 3, unit_price: 2.0, options: ["Coca-Cola"] }] },
-    { id: "o4", code: "GP-4824", source: "walkin",   customer_name: "Pedro Objío",     phone: "9175550110", mode: "pickup",   status: "cooking", payment: "unpaid", paid_at: null,        notified_at: null,        total: 22.5, loyalty_code: null,        note: null,                created_at: minsAgo(23),
+    { id: "o4", code: "GP-4824", source: "walkin", taken_by_name: "Luis Peña",      handled_by_name: "Luis Peña",   customer_name: "Pedro Objío",     phone: "9175550110", mode: "pickup",   status: "cooking", payment: "unpaid", paid_at: null,        notified_at: null,        total: 22.5, loyalty_code: null,        note: null,                created_at: minsAgo(23),
       order_items: [{ name: "Pollo guisado", qty: 1, unit_price: 11.5, options: ["Con maduros"] }, { name: "Quipes", qty: 3, unit_price: 3.0, options: [] }, { name: "Refresco", qty: 1, unit_price: 2.0, options: ["Sprite"] }] },
-    { id: "o5", code: "GP-4825", source: "phone",    customer_name: "Luisa Guerrero",  phone: "9175550163", mode: "pickup",   status: "ready",   payment: "unpaid", paid_at: null,        notified_at: null,        total: 15.5, loyalty_code: "GP-LOYAL-77", note: "Cliente frecuente", created_at: minsAgo(31),
+    { id: "o5", code: "GP-4825", source: "phone", taken_by_name: "Yudelka Objío",  handled_by_name: "Yudelka Objío",    customer_name: "Luisa Guerrero",  phone: "9175550163", mode: "pickup",   status: "ready",   payment: "unpaid", paid_at: null,        notified_at: null,        total: 15.5, loyalty_code: "GP-LOYAL-77", note: "Cliente frecuente", created_at: minsAgo(31),
       order_items: [{ name: "Empanadas", qty: 3, unit_price: 3.5, options: ["Carne"] }, { name: "Morir Soñando", qty: 1, unit_price: 4.5, options: [] }] },
-    { id: "o6", code: "GP-4826", source: "doordash", customer_name: "Kelvin Mateo",    phone: "9175550154", mode: "delivery", status: "ready",   payment: "paid",   paid_at: minsAgo(38), notified_at: minsAgo(38), total: 31.0, loyalty_code: null,        note: null,                created_at: minsAgo(38),
+    { id: "o6", code: "GP-4826", source: "doordash", taken_by_name: null,             handled_by_name: "Luis Peña", customer_name: "Kelvin Mateo",    phone: "9175550154", mode: "delivery", status: "ready",   payment: "paid",   paid_at: minsAgo(38), notified_at: minsAgo(38), total: 31.0, loyalty_code: null,        note: null,                created_at: minsAgo(38),
       order_items: [{ name: "Mofongo", qty: 2, unit_price: 14.0, options: ["Con camarones"] }, { name: "Jarritos", qty: 1, unit_price: 2.5, options: ["Tamarindo"] }] },
 
     // Completed, so the reports page has something to add up.
@@ -108,6 +110,8 @@ export const seed = {
       return {
         id: `d${i}`, code: `GP-47${(50 + i).toString().padStart(2, "0")}`, source: src,
         customer_name: "Cliente", phone: "9175550100", mode: i % 2 ? "delivery" : "pickup",
+        taken_by_name: ["web", "whatsapp", "ubereats", "doordash"].includes(src) ? null : STAFF[i % 2],
+        handled_by_name: STAFF[i % 2],
         status: "done", payment: "paid", total: Number((a[1] * qa + b[1]).toFixed(2)), loyalty_code: null, note: null,
         created_at: daysAgo((i % 7) + (i % 3) * 0.1),
         order_items: [
@@ -116,9 +120,9 @@ export const seed = {
         ],
       };
     }),
-    { id: "c1", code: "GP-4790", source: "ubereats", customer_name: "Wilkin Santos", phone: "9175550121", mode: "delivery", status: "cancelled", payment: "refunded", paid_at: null, notified_at: null, total: 24.0, loyalty_code: null, note: "Cliente canceló", created_at: daysAgo(1),
+    { id: "c1", code: "GP-4790", source: "ubereats", taken_by_name: null, handled_by_name: "Yudelka Objío", customer_name: "Wilkin Santos", phone: "9175550121", mode: "delivery", status: "cancelled", payment: "refunded", paid_at: null, notified_at: null, total: 24.0, loyalty_code: null, note: "Cliente canceló", created_at: daysAgo(1),
       order_items: [{ name: "Mofongo", qty: 1, unit_price: 14.0, options: [] }, { name: "Chicharrón de cerdo", qty: 1, unit_price: 12.0, options: [] }] },
-    { id: "c2", code: "GP-4772", source: "phone", customer_name: "Rosa Jiménez", phone: "9175550188", mode: "pickup", status: "cancelled", payment: "unpaid", paid_at: null, notified_at: null, total: 11.5, loyalty_code: null, note: "No vino a recoger", created_at: daysAgo(3),
+    { id: "c2", code: "GP-4772", source: "phone", taken_by_name: "Luis Peña", handled_by_name: "Luis Peña", customer_name: "Rosa Jiménez", phone: "9175550188", mode: "pickup", status: "cancelled", payment: "unpaid", paid_at: null, notified_at: null, total: 11.5, loyalty_code: null, note: "No vino a recoger", created_at: daysAgo(3),
       order_items: [{ name: "Pollo guisado", qty: 1, unit_price: 11.5, options: [] }] },
   ],
 

@@ -61,6 +61,8 @@ type Row = {
   total: number;
   note: string | null;
   created_at: string;
+  taken_by_name?: string | null;
+  handled_by_name?: string | null;
   order_items: { name: string; qty: number }[] | null;
 };
 
@@ -93,7 +95,7 @@ export default function HistoryPage() {
       sb
         .from("orders")
         .select(
-          "id, code, source, customer_name, phone, mode, status, payment, total, note, created_at, order_items(name, qty)",
+          "id, code, source, customer_name, phone, mode, status, payment, total, note, created_at, taken_by_name, handled_by_name, order_items(name, qty)",
         )
         .gte("created_at", new Date(Date.now() - days * 864e5).toISOString())
         .order("created_at", { ascending: false }) as never,
@@ -108,6 +110,7 @@ export default function HistoryPage() {
       if (!needle) return true;
       const hay = fold(
         [o.code, o.customer_name ?? "", o.phone ?? "",
+         o.taken_by_name ?? "", o.handled_by_name ?? "",
          ...(o.order_items ?? []).map((i) => i.name)].join(" "),
       );
       return hay.includes(needle);
@@ -183,13 +186,14 @@ export default function HistoryPage() {
           {/* The table scrolls inside its own box; the page never scrolls
               sideways on a phone. */}
           <div className="overflow-x-auto">
-            <table className="w-full text-sm" style={{ minWidth: 720 }}>
+            <table className="w-full text-sm" style={{ minWidth: 840 }}>
               <thead>
                 <tr style={{ background: "var(--surface-2)", color: "var(--muted)" }}>
                   <th className="text-left font-semibold px-3 py-2">Pedido</th>
                   <th className="text-left font-semibold px-3 py-2">Canal</th>
                   <th className="text-left font-semibold px-3 py-2">Cliente</th>
                   <th className="text-left font-semibold px-3 py-2">Detalle</th>
+                  <th className="text-left font-semibold px-3 py-2">Atendido por</th>
                   <th className="text-left font-semibold px-3 py-2">Estado</th>
                   <th className="text-right font-semibold px-3 py-2">Total</th>
                 </tr>
@@ -233,6 +237,12 @@ export default function HistoryPage() {
                           <span className="block text-xs italic" style={{ color: "var(--ember)" }}>
                             “{o.note}”
                           </span>
+                        )}
+                      </td>
+
+                      <td className="px-3 py-2.5 text-xs" style={{ color: "var(--muted)" }}>
+                        {o.handled_by_name ?? o.taken_by_name ?? (
+                          <span style={{ color: "var(--faint)" }}>automático</span>
                         )}
                       </td>
 
