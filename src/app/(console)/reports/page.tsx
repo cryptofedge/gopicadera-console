@@ -9,8 +9,38 @@ type Row = {
   status: string;
   source: string;
   created_at: string;
+  handled_by_name: string | null;
+  taken_by_name: string | null;
   order_items: { name: string; qty: number }[] | null;
 };
+
+const SOURCE_LABEL: Record<string, string> = {
+  web: "Página web",
+  whatsapp: "WhatsApp",
+  doordash: "DoorDash",
+  ubereats: "Uber Eats",
+  grubhub: "Grubhub",
+  phone: "Teléfono",
+  walkin: "En tienda",
+};
+
+/** A labelled bar, sized against the biggest value in its own list. */
+function Bar({ label, value, max, suffix }: {
+  label: string; value: number; max: number; suffix: string;
+}) {
+  return (
+    <div className="mb-2.5">
+      <div className="flex items-baseline gap-2 mb-1">
+        <span className="text-sm">{label}</span>
+        <span className="ml-auto text-sm font-bold nums">{suffix}</span>
+      </div>
+      <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "var(--surface-2)" }}>
+        <div className="h-full rounded-full"
+             style={{ width: `${max > 0 ? (value / max) * 100 : 0}%`, background: "var(--yellow)" }} />
+      </div>
+    </div>
+  );
+}
 
 function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
@@ -31,7 +61,7 @@ export default function ReportsPage() {
     (sb) =>
       sb
         .from("orders")
-        .select("total, status, source, created_at, order_items(name, qty)")
+        .select("total, status, source, created_at, handled_by_name, taken_by_name, order_items(name, qty)")
         .eq("status", "done")
         .gte("created_at", new Date(Date.now() - 7 * 864e5).toISOString()) as never,
   );
@@ -61,6 +91,25 @@ export default function ReportsPage() {
     return acc;
   }, {});
 
+  // Revenue per channel, not just ticket count — three Uber orders at $40 are
+  // not the same business as three walk-ins at $8.
+  const channelMoney = new Map<string, number>();
+  rows.forEach((o) => channelMoney.set(o.source, (channelMoney.get(o.source) ?? 0) + Number(o.total ?? 0)));
+  const channels = [...channelMoney.entries()].sort((a, b) => b[1] - a[1]);
+  const channelMax = channels[0]?.[1] ?? 0;
+
+  // Orders closed per person. Anything that came off a platform without a
+  // human touching it is left out rather than credited to nobody.
+  const perPerson = new Map<string, { count: number; money: number }>();
+  rows.forEach((o) => {
+    const who = o.handled_by_name ?? o.taken_by_name;
+    if (!who) return;
+    const cur = perPerson.get(who) ?? { count: 0, money: 0 };
+    perPerson.set(who, { count: cur.count + 1, money: cur.money + Number(o.total ?? 0) });
+  });
+  const people = [...perPerson.entries()].sort((a, b) => b[1].money - a[1].money);
+  const peopleMax = people[0]?.[1].money ?? 0;
+
   return (
     <>
       <h1 className="text-xl font-black mb-3">Reportes</h1>
@@ -75,6 +124,41 @@ export default function ReportsPage() {
           value={String(Object.keys(bySource).length)}
           sub={Object.entries(bySource).map(([k, v]) => `${k} ${v}`).join(" · ") || "—"}
         />
+      </div>
+
+      <div className="grid gap-4 mb-6"
+           style={{ gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))" }}>
+        <div className="rounded-xl border p-4"
+             style={{ background: "var(--surface)", borderColor: "var(--line)" }}>
+          <h2 className="text-xs font-bold uppercase tracking-wider mb-3"
+              style={{ color: "var(--muted)" }}>Ventas por canal · 7 días</h2>
+          {channels.length === 0 && (
+            <p className="text-xs" style={{ color: "var(--faint)" }}>Sin datos todavía.</p>
+          )}
+          {channels.map(([src, amount]) => (
+            <Bar key={src} label={SOURCE_LABEL[src] ?? src} value={amount}
+                 max={channelMax} suffix={money(amount)} />
+          ))}
+        </div>
+
+        <div className="rounded-xl border p-4"
+             style={{ background: "var(--surface)", borderColor: "var(--line)" }}>
+          <h2 className="text-xs font-bold uppercase tracking-wider mb-3"
+              style={{ color: "var(--muted)" }}>Por persona · 7 días</h2>
+          {people.length === 0 && (
+            <p className="text-xs" style={{ color: "var(--faint)" }}>
+              Sin pedidos atendidos por el equipo todavía.
+            </p>
+          )}
+          {people.map(([who, v]) => (
+            <Bar key={who} label={who} value={v.money} max={peopleMax}
+                 suffix={`${money(v.money)} · ${v.count}`} />
+          ))}
+          <p className="text-xs mt-2" style={{ color: "var(--faint)" }}>
+            Cuenta los pedidos que cada quien cerró. Los que entran solos desde
+            las plataformas no se le cuentan a nadie.
+          </p>
+        </div>
       </div>
 
       <h2 className="text-xs font-bold uppercase tracking-wider mb-2 pb-1 border-b"
