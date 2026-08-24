@@ -134,10 +134,14 @@ export const seed = {
   ],
 
   integrations: [
-    { provider: "ubereats", status: "connected",    store_id: "UE-4471-BK", client_id: "ue_live_8821", has_secret: true,  last_order_at: minsAgo(16), last_error: null, auto_accept: true },
-    { provider: "doordash", status: "connected",    store_id: "DD-90233",   client_id: "dd_live_3390", has_secret: true,  last_order_at: minsAgo(38), last_error: null, auto_accept: false },
-    { provider: "grubhub",  status: "pending",      store_id: null,         client_id: null,           has_secret: false, last_order_at: null,        last_error: null, auto_accept: false },
-    { provider: "whatsapp", status: "connected",    store_id: "17185551234", client_id: "wa_biz_1120", has_secret: true,  last_order_at: minsAgo(4),  last_error: null, auto_accept: false },
+    { kind: "delivery", provider: "ubereats", status: "connected",    store_id: "UE-4471-BK", client_id: "ue_live_8821", has_secret: true,  last_order_at: minsAgo(16), last_error: null, auto_accept: true },
+    { kind: "delivery", provider: "doordash", status: "connected",    store_id: "DD-90233",   client_id: "dd_live_3390", has_secret: true,  last_order_at: minsAgo(38), last_error: null, auto_accept: false },
+    { kind: "delivery", provider: "grubhub",  status: "pending",      store_id: null,         client_id: null,           has_secret: false, last_order_at: null,        last_error: null, auto_accept: false },
+    { kind: "messaging", provider: "whatsapp", status: "connected",    store_id: "17185551234", client_id: "wa_biz_1120", has_secret: true,  last_order_at: minsAgo(4),  last_error: null, auto_accept: false },
+    { kind: "pos", provider: "square",     status: "connected",    store_id: "SQ-BK-4820", client_id: "sq0idp-91x", has_secret: true,  last_order_at: minsAgo(23), last_error: null, auto_accept: false },
+    { kind: "pos", provider: "clover",     status: "disconnected", store_id: null,         client_id: null,         has_secret: false, last_order_at: null,        last_error: null, auto_accept: false },
+    { kind: "pos", provider: "toast",      status: "disconnected", store_id: null,         client_id: null,         has_secret: false, last_order_at: null,        last_error: null, auto_accept: false },
+    { kind: "pos", provider: "lightspeed", status: "disconnected", store_id: null,         client_id: null,         has_secret: false, last_order_at: null,        last_error: null, auto_accept: false },
   ] as Record<string, unknown>[],
 
   stock_moves: [] as Record<string, unknown>[],

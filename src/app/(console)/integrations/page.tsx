@@ -1,13 +1,15 @@
 "use client";
 
 /**
- * Delivery channels. Owner-only.
+ * Everything this console connects to: delivery marketplaces, the point of
+ * sale, and the WhatsApp number. Owner-only.
  *
- * These platforms have no click-to-connect. Each one requires the restaurant to
- * be approved as an API partner on its merchant portal, which then issues a
- * store id and a key pair. So this page is where the owner pastes what each
- * platform gave them, and where a channel that has quietly stopped delivering
- * orders becomes visible.
+ * Two kinds of connection live here, and the difference matters. Square, Clover
+ * and Lightspeed offer real OAuth — one button, no keys ever in the owner's
+ * hands. Uber Eats, DoorDash, Grubhub and Toast require the restaurant to be
+ * approved as an API partner first, which then yields a store id and a key
+ * pair to paste. The card says which it is rather than showing a Connect button
+ * that cannot work yet.
  *
  * Secrets are write-only from here: once saved, the field shows that a key
  * exists and never its value. Staff cannot open this page at all, and RLS
@@ -17,11 +19,16 @@ import { useState } from "react";
 import { browserClient } from "@/lib/supabase-browser";
 import { useQuery } from "@/lib/useQuery";
 
-type Provider = "doordash" | "ubereats" | "grubhub" | "whatsapp";
+type Provider =
+  | "doordash" | "ubereats" | "grubhub"
+  | "whatsapp"
+  | "square" | "clover" | "toast" | "lightspeed";
+type Kind = "delivery" | "messaging" | "pos";
 type Status = "disconnected" | "pending" | "connected" | "error";
 
 type Row = {
   provider: Provider;
+  kind: Kind;
   status: Status;
   store_id: string | null;
   client_id: string | null;
@@ -31,7 +38,13 @@ type Row = {
   auto_accept: boolean;
 };
 
-const META: Record<Provider, { name: string; blurb: string; portal: string; color: string }> = {
+/**
+ * `oauth: true` means the provider genuinely supports click-to-connect and the
+ * owner never handles a key. The rest require the restaurant to be approved as
+ * a partner first, which is a business step no amount of code shortens — so the
+ * card says so instead of pretending otherwise.
+ */
+const META: Record<Provider, { name: string; blurb: string; portal: string; color: string; oauth?: boolean }> = {
   ubereats: {
     name: "Uber Eats",
     blurb: "Pide acceso de API en Uber Eats Manager. Ellos aprueban y te dan las llaves.",
@@ -56,7 +69,53 @@ const META: Record<Provider, { name: string; blurb: string; portal: string; colo
     portal: "business.facebook.com",
     color: "#25D366",
   },
+
+  square: {
+    name: "Square",
+    blurb: "Conecta directo con tu cuenta de Square. Sincroniza menú, precios y ventas.",
+    portal: "squareup.com",
+    color: "#3E4348",
+    oauth: true,
+  },
+  clover: {
+    name: "Clover",
+    blurb: "Conecta con tu cuenta de Clover desde aquí.",
+    portal: "clover.com",
+    color: "#0B7C3E",
+    oauth: true,
+  },
+  toast: {
+    name: "Toast",
+    blurb: "Toast exige aprobación de socio antes de dar acceso a la API.",
+    portal: "toasttab.com",
+    color: "#FF4C00",
+  },
+  lightspeed: {
+    name: "Lightspeed",
+    blurb: "Conecta con tu cuenta de Lightspeed Restaurant.",
+    portal: "lightspeedhq.com",
+    color: "#F5344C",
+    oauth: true,
+  },
 };
+
+const SECTIONS: { kind: Kind; title: string; note: string }[] = [
+  {
+    kind: "delivery",
+    title: "Canales de pedido",
+    note: "Los pedidos de todas las plataformas caen en la misma pantalla de Pedidos, marcados con su canal.",
+  },
+  {
+    kind: "pos",
+    title: "Punto de venta",
+    note: "Conecta la caja para que el menú, los precios y las ventas del mostrador cuadren con la consola. Solo se puede conectar un sistema a la vez.",
+  },
+  {
+    kind: "messaging",
+    title: "Mensajería",
+    note: "El número por el que sale la confirmación de pago al cliente.",
+  },
+];
 
 const STATUS_LABEL: Record<Status, string> = {
   connected: "Conectado",
@@ -93,7 +152,7 @@ export default function IntegrationsPage() {
     (sb) =>
       sb
         .from("integrations")
-        .select("provider, status, store_id, client_id, has_secret, last_order_at, last_error, auto_accept")
+        .select("provider, kind, status, store_id, client_id, has_secret, last_order_at, last_error, auto_accept")
         .order("provider") as never,
   );
 
@@ -127,7 +186,11 @@ export default function IntegrationsPage() {
   }
 
   async function disconnect(provider: Provider) {
-    if (!confirm(`¿Desconectar ${META[provider].name}? Dejarán de entrar pedidos de este canal.`)) return;
+    const isPos = rows.find((r) => r.provider === provider)?.kind === "pos";
+    const warn = isPos
+      ? `¿Desconectar ${META[provider].name}? El menú y las ventas del mostrador dejarán de sincronizarse.`
+      : `¿Desconectar ${META[provider].name}? Dejarán de entrar pedidos de este canal.`;
+    if (!confirm(warn)) return;
     setBusy(true);
     await browserClient()
       .from("integrations")
@@ -154,15 +217,25 @@ export default function IntegrationsPage() {
 
   return (
     <>
-      <h1 className="text-xl font-black mb-1">Canales de pedido</h1>
-      <p className="text-sm mb-5" style={{ color: "var(--muted)" }}>
-        Los pedidos de todas las plataformas caen en la misma pantalla de
-        Pedidos, marcados con su canal.
+      <h1 className="text-xl font-black mb-1">Conexiones</h1>
+      <p className="text-sm mb-6" style={{ color: "var(--muted)" }}>
+        Todo lo que la consola conecta con el mundo de afuera.
       </p>
 
-      <div className="grid gap-3 mb-6"
+{SECTIONS.map((sec) => {
+  const group = rows.filter((r) => r.kind === sec.kind);
+  if (group.length === 0) return null;
+  return (
+    <section key={sec.kind} className="mb-7">
+      <h2 className="text-xs font-bold uppercase tracking-wider mb-1 pb-1 border-b"
+          style={{ color: "var(--muted)", borderColor: "var(--line)" }}>
+        {sec.title}
+      </h2>
+      <p className="text-xs mb-3" style={{ color: "var(--faint)" }}>{sec.note}</p>
+
+      <div className="grid gap-3"
            style={{ gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))" }}>
-        {rows.map((r) => {
+        {group.map((r) => {
           const m = META[r.provider];
           return (
             <div key={r.provider} className="rounded-xl border p-4"
@@ -203,7 +276,9 @@ export default function IntegrationsPage() {
                   className="px-3 py-1.5 rounded-full text-xs font-bold"
                   style={{ background: "var(--yellow)", color: "#0A0B0E" }}
                 >
-                  {r.status === "disconnected" ? "Conectar" : "Editar"}
+                  {r.status === "disconnected"
+                    ? m.oauth ? `Conectar con ${m.name}` : "Conectar"
+                    : "Editar"}
                 </button>
                 {r.status !== "disconnected" && (
                   <button
@@ -224,7 +299,9 @@ export default function IntegrationsPage() {
                   style={{ borderColor: "var(--line)" }}
                 >
                   <p className="text-xs" style={{ color: "var(--faint)" }}>
-                    Estos datos salen del portal de {m.portal}.
+                    {m.oauth
+                      ? `Al guardar te mandamos a ${m.portal} para que autorices la conexión con tu propia cuenta. No hace falta copiar llaves.`
+                      : `Estos datos salen del portal de ${m.portal}.`}
                   </p>
                   <input name="store_id" defaultValue={r.store_id ?? ""}
                          placeholder="ID de tienda"
@@ -253,20 +330,27 @@ export default function IntegrationsPage() {
           );
         })}
       </div>
+    </section>
+  );
+})}
 
       <div className="rounded-xl border p-4 max-w-3xl"
            style={{ background: "var(--surface)", borderColor: "var(--line-warm)" }}>
         <h2 className="text-xs font-bold uppercase tracking-wider mb-2"
             style={{ color: "var(--yellow)" }}>
-          Cómo se conecta cada plataforma
+          Cómo se conecta cada uno
         </h2>
+        <p className="text-xs leading-relaxed mb-2" style={{ color: "var(--muted)" }}>
+          <strong style={{ color: "var(--text)" }}>Square, Clover y Lightspeed</strong>{" "}
+          se conectan con un botón: te mandan a tu propia cuenta, la autorizas y
+          listo. Nunca tienes que copiar una llave.
+        </p>
         <p className="text-xs leading-relaxed" style={{ color: "var(--muted)" }}>
-          Uber Eats, DoorDash y Grubhub no dejan conectar una cuenta con un
-          botón: hay que pedirles acceso de API desde el portal de comercios de
-          cada una, y ellos lo aprueban. Cuando aprueben, te dan un ID de tienda
-          y un par de llaves — eso es lo que se pega aquí arriba y con eso
-          empiezan a caer los pedidos solos. Mientras tanto, el canal se queda
-          en “Esperando aprobación”.
+          <strong style={{ color: "var(--text)" }}>Uber Eats, DoorDash, Grubhub y Toast</strong>{" "}
+          no funcionan así: hay que pedirles acceso de API desde su portal de
+          comercios y esperar a que lo aprueben. Cuando aprueben te dan un ID de
+          tienda y un par de llaves, y eso es lo que se pega aquí. Mientras
+          tanto el canal se queda en “Esperando aprobación”.
         </p>
       </div>
     </>
