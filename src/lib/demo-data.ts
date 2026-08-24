@@ -116,8 +116,14 @@ export const seed = {
         ],
       };
     }),
+    { id: "c1", code: "GP-4790", source: "ubereats", customer_name: "Wilkin Santos", phone: "9175550121", mode: "delivery", status: "cancelled", payment: "refunded", paid_at: null, notified_at: null, total: 24.0, loyalty_code: null, note: "Cliente canceló", created_at: daysAgo(1),
+      order_items: [{ name: "Mofongo", qty: 1, unit_price: 14.0, options: [] }, { name: "Chicharrón de cerdo", qty: 1, unit_price: 12.0, options: [] }] },
+    { id: "c2", code: "GP-4772", source: "phone", customer_name: "Rosa Jiménez", phone: "9175550188", mode: "pickup", status: "cancelled", payment: "unpaid", paid_at: null, notified_at: null, total: 11.5, loyalty_code: null, note: "No vino a recoger", created_at: daysAgo(3),
+      order_items: [{ name: "Pollo guisado", qty: 1, unit_price: 11.5, options: [] }] },
   ],
 
+  // Cancelled ones exist so the history filter is not a list of successes.
+  // They live in `orders` too; this array is spread into it above.
   settings: [
     { key: "hours", value: [
       { open: 11, close: 23 }, { open: 11, close: 23 }, { open: 11, close: 23 },
