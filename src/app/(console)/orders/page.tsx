@@ -5,7 +5,7 @@ import { useQuery } from "@/lib/useQuery";
 import OrderBoard, { type Order } from "./OrderBoard";
 
 const SELECT =
-  "id, code, source, customer_name, phone, mode, status, total, loyalty_code, note, created_at, order_items(name, qty, unit_price, options)";
+  "id, code, source, customer_name, phone, mode, status, total, payment, notified_at, loyalty_code, note, created_at, order_items(name, qty, unit_price, options)";
 
 export default function OrdersPage() {
   const { profile } = useSession();

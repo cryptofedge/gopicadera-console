@@ -18,6 +18,7 @@ const ITEMS: Item[] = [
   { href: "/orders",    label: "Pedidos" },
   { href: "/inventory", label: "Inventario" },
   { href: "/menu",      label: "Menú",       owner: true },
+  { href: "/integrations", label: "Canales", owner: true },
   { href: "/staff",     label: "Equipo",     owner: true },
   { href: "/reports",   label: "Reportes",   owner: true },
   { href: "/settings",  label: "Ajustes",    owner: true },

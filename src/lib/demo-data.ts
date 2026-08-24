@@ -82,17 +82,17 @@ export const seed = {
   ],
 
   orders: [
-    { id: "o1", code: "GP-4821", source: "web",      customer_name: "María Fernández", phone: "9175550142", mode: "pickup",   status: "new",     total: 27.5, loyalty_code: null,        note: "Sin cebolla",       created_at: minsAgo(4),
+    { id: "o1", code: "GP-4821", source: "web",      customer_name: "María Fernández", phone: "9175550142", mode: "pickup",   status: "new",     payment: "paid",   paid_at: minsAgo(4),  notified_at: minsAgo(4),  total: 27.5, loyalty_code: null,        note: "Sin cebolla",       created_at: minsAgo(4),
       order_items: [{ name: "Mofongo", qty: 1, unit_price: 14.0, options: ["Con pernil"] }, { name: "Empanadas", qty: 2, unit_price: 3.5, options: ["Pollo"] }, { name: "Morir Soñando", qty: 1, unit_price: 4.5, options: ["Sin azúcar"] }] },
-    { id: "o2", code: "GP-4822", source: "whatsapp", customer_name: "José Ramírez",    phone: "9175550198", mode: "delivery", status: "new",     total: 18.0, loyalty_code: null,        note: null,                created_at: minsAgo(9),
+    { id: "o2", code: "GP-4822", source: "whatsapp", customer_name: "José Ramírez",    phone: "9175550198", mode: "delivery", status: "new",     payment: "paid",   paid_at: minsAgo(9),  notified_at: minsAgo(9),  total: 18.0, loyalty_code: null,        note: null,                created_at: minsAgo(9),
       order_items: [{ name: "Pernil", qty: 1, unit_price: 13.0, options: ["Con tostones"] }, { name: "Country Club", qty: 2, unit_price: 2.5, options: ["Uva"] }] },
-    { id: "o3", code: "GP-4823", source: "ubereats", customer_name: "Ana Beltré",      phone: "9175550177", mode: "delivery", status: "cooking", total: 41.0, loyalty_code: null,        note: "Extra picante",     created_at: minsAgo(16),
+    { id: "o3", code: "GP-4823", source: "ubereats", customer_name: "Ana Beltré",      phone: "9175550177", mode: "delivery", status: "cooking", payment: "paid",   paid_at: minsAgo(16), notified_at: minsAgo(16), total: 41.0, loyalty_code: null,        note: "Extra picante",     created_at: minsAgo(16),
       order_items: [{ name: "Chicharrón de cerdo", qty: 2, unit_price: 12.0, options: [] }, { name: "Tostones", qty: 2, unit_price: 5.0, options: ["Sin sal"] }, { name: "Refresco", qty: 3, unit_price: 2.0, options: ["Coca-Cola"] }] },
-    { id: "o4", code: "GP-4824", source: "walkin",   customer_name: "Pedro Objío",     phone: "9175550110", mode: "pickup",   status: "cooking", total: 22.5, loyalty_code: null,        note: null,                created_at: minsAgo(23),
+    { id: "o4", code: "GP-4824", source: "walkin",   customer_name: "Pedro Objío",     phone: "9175550110", mode: "pickup",   status: "cooking", payment: "unpaid", paid_at: null,        notified_at: null,        total: 22.5, loyalty_code: null,        note: null,                created_at: minsAgo(23),
       order_items: [{ name: "Pollo guisado", qty: 1, unit_price: 11.5, options: ["Con maduros"] }, { name: "Quipes", qty: 3, unit_price: 3.0, options: [] }, { name: "Refresco", qty: 1, unit_price: 2.0, options: ["Sprite"] }] },
-    { id: "o5", code: "GP-4825", source: "phone",    customer_name: "Luisa Guerrero",  phone: "9175550163", mode: "pickup",   status: "ready",   total: 15.5, loyalty_code: "GP-LOYAL-77", note: "Cliente frecuente", created_at: minsAgo(31),
+    { id: "o5", code: "GP-4825", source: "phone",    customer_name: "Luisa Guerrero",  phone: "9175550163", mode: "pickup",   status: "ready",   payment: "unpaid", paid_at: null,        notified_at: null,        total: 15.5, loyalty_code: "GP-LOYAL-77", note: "Cliente frecuente", created_at: minsAgo(31),
       order_items: [{ name: "Empanadas", qty: 3, unit_price: 3.5, options: ["Carne"] }, { name: "Morir Soñando", qty: 1, unit_price: 4.5, options: [] }] },
-    { id: "o6", code: "GP-4826", source: "doordash", customer_name: "Kelvin Mateo",    phone: "9175550154", mode: "delivery", status: "ready",   total: 31.0, loyalty_code: null,        note: null,                created_at: minsAgo(38),
+    { id: "o6", code: "GP-4826", source: "doordash", customer_name: "Kelvin Mateo",    phone: "9175550154", mode: "delivery", status: "ready",   payment: "paid",   paid_at: minsAgo(38), notified_at: minsAgo(38), total: 31.0, loyalty_code: null,        note: null,                created_at: minsAgo(38),
       order_items: [{ name: "Mofongo", qty: 2, unit_price: 14.0, options: ["Con camarones"] }, { name: "Jarritos", qty: 1, unit_price: 2.5, options: ["Tamarindo"] }] },
 
     // Completed, so the reports page has something to add up.
@@ -108,7 +108,7 @@ export const seed = {
       return {
         id: `d${i}`, code: `GP-47${(50 + i).toString().padStart(2, "0")}`, source: src,
         customer_name: "Cliente", phone: "9175550100", mode: i % 2 ? "delivery" : "pickup",
-        status: "done", total: Number((a[1] * qa + b[1]).toFixed(2)), loyalty_code: null, note: null,
+        status: "done", payment: "paid", total: Number((a[1] * qa + b[1]).toFixed(2)), loyalty_code: null, note: null,
         created_at: daysAgo((i % 7) + (i % 3) * 0.1),
         order_items: [
           { name: a[0], qty: qa, unit_price: a[1], options: [] },
@@ -126,6 +126,13 @@ export const seed = {
     ] },
     { key: "whatsapp", value: "17185551234" },
   ],
+
+  integrations: [
+    { provider: "ubereats", status: "connected",    store_id: "UE-4471-BK", client_id: "ue_live_8821", has_secret: true,  last_order_at: minsAgo(16), last_error: null, auto_accept: true },
+    { provider: "doordash", status: "connected",    store_id: "DD-90233",   client_id: "dd_live_3390", has_secret: true,  last_order_at: minsAgo(38), last_error: null, auto_accept: false },
+    { provider: "grubhub",  status: "pending",      store_id: null,         client_id: null,           has_secret: false, last_order_at: null,        last_error: null, auto_accept: false },
+    { provider: "whatsapp", status: "connected",    store_id: "17185551234", client_id: "wa_biz_1120", has_secret: true,  last_order_at: minsAgo(4),  last_error: null, auto_accept: false },
+  ] as Record<string, unknown>[],
 
   stock_moves: [] as Record<string, unknown>[],
 };

@@ -16,7 +16,7 @@ import { SessionProvider, useSession } from "@/lib/session";
 // "/inventory" itself is staff-accessible; only creating an item is not.
 // startsWith means the more specific path can be listed without catching the
 // parent route.
-const OWNER_ONLY = ["/menu", "/staff", "/reports", "/settings", "/inventory/new"];
+const OWNER_ONLY = ["/menu", "/staff", "/reports", "/settings", "/inventory/new", "/integrations"];
 
 function Guard({ children }: { children: React.ReactNode }) {
   const { profile, loading } = useSession();

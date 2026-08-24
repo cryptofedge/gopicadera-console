@@ -22,6 +22,10 @@ export type Order = {
   total: number;
   loyalty_code: string | null;
   note: string | null;
+  payment?: "unpaid" | "pending" | "paid" | "refunded" | "failed";
+  // Stamped when the payment-confirmation WhatsApp was queued, so the board can
+  // show that the customer has already been told.
+  notified_at?: string | null;
   created_at: string;
   order_items: {
     name: string;
@@ -81,6 +85,27 @@ function Ticket({
           {age}m
         </span>
       </header>
+
+      {/* Online orders arrive already paid; a walk-in is collected at the
+          counter. Staff need that difference at a glance before handing food
+          over. */}
+      {o.payment === "paid" && (
+        <p className="text-[11px] font-bold uppercase tracking-wider mb-2 flex items-center gap-1.5"
+           style={{ color: "var(--green)" }}>
+          <span>Pagado</span>
+          {o.notified_at && (
+            <span style={{ color: "var(--faint)" }} className="font-normal normal-case tracking-normal">
+              · confirmación enviada por WhatsApp
+            </span>
+          )}
+        </p>
+      )}
+      {o.payment === "unpaid" && (
+        <p className="text-[11px] font-bold uppercase tracking-wider mb-2"
+           style={{ color: "var(--yellow)" }}>
+          Cobrar al entregar
+        </p>
+      )}
 
       {(o.customer_name || o.phone) && (
         <p className="text-xs mb-2" style={{ color: "var(--muted)" }}>
