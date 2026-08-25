@@ -242,6 +242,14 @@ export default function IntegrationsPage() {
 
   const rows = data ?? [];
 
+  // Split by how each provider actually connects, so the explainer below can
+  // never contradict the cards above it.
+  const shown = rows.map((r) => r.provider).filter((pv) => META[pv]);
+  const oauthNames = shown.filter((pv) => META[pv].oauth).map((pv) => META[pv].name);
+  const partnerNames = shown
+    .filter((pv) => !META[pv].oauth && pv !== "whatsapp")
+    .map((pv) => META[pv].name);
+
   return (
     <>
       <h1 className="text-xl font-black mb-1">Conexiones</h1>
@@ -361,23 +369,32 @@ export default function IntegrationsPage() {
   );
 })}
 
+      {/* Derived from META rather than written out by hand. The last version
+          of this paragraph listed the delivery and POS names literally, and
+          went stale the moment the ad platforms were added. */}
       <div className="rounded-xl border p-4 max-w-3xl"
            style={{ background: "var(--surface)", borderColor: "var(--line-warm)" }}>
         <h2 className="text-xs font-bold uppercase tracking-wider mb-2"
             style={{ color: "var(--yellow)" }}>
           Cómo se conecta cada uno
         </h2>
+
         <p className="text-xs leading-relaxed mb-2" style={{ color: "var(--muted)" }}>
-          <strong style={{ color: "var(--text)" }}>Square, Clover y Lightspeed</strong>{" "}
+          <strong style={{ color: "var(--text)" }}>
+            {oauthNames.join(", ")}
+          </strong>{" "}
           se conectan con un botón: te mandan a tu propia cuenta, la autorizas y
           listo. Nunca tienes que copiar una llave.
         </p>
+
         <p className="text-xs leading-relaxed" style={{ color: "var(--muted)" }}>
-          <strong style={{ color: "var(--text)" }}>Uber Eats, DoorDash, Grubhub y Toast</strong>{" "}
-          no funcionan así: hay que pedirles acceso de API desde su portal de
-          comercios y esperar a que lo aprueben. Cuando aprueben te dan un ID de
-          tienda y un par de llaves, y eso es lo que se pega aquí. Mientras
-          tanto el canal se queda en “Esperando aprobación”.
+          <strong style={{ color: "var(--text)" }}>
+            {partnerNames.join(", ")}
+          </strong>{" "}
+          no funcionan así: hay que pedirles acceso desde su portal de comercios
+          y esperar a que lo aprueben. Cuando aprueben te dan un ID de tienda y
+          un par de llaves, y eso es lo que se pega aquí. Mientras tanto se
+          quedan en “Esperando aprobación”.
         </p>
       </div>
     </>
