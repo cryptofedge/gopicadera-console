@@ -10,11 +10,15 @@
 import { useState } from "react";
 import { browserClient } from "@/lib/supabase-browser";
 import type { Role } from "@/lib/session";
+import ItemEditor, { type Item } from "./ItemEditor";
 
 export type Dish = {
   id: string;
   slug: string;
   name: string;
+  desc_es: string | null;
+  desc_en: string | null;
+  image_path: string | null;
   price: number | null;
   available: boolean;
   featured: number | null;
@@ -27,15 +31,17 @@ const money = (n: number | null) =>
   n === null || n === undefined ? "—" : "$" + Number(n).toFixed(2);
 
 export default function MenuTable({
-  rows, role, onChanged,
+  rows, role, onChanged, categories,
 }: {
   rows: Dish[];
   role: Role;
   onChanged: () => void;
+  categories: { id: string; name_es: string }[];
 }) {
   const owner = role === "owner";
   const [busy, setBusy] = useState<string | null>(null);
   const [q, setQ] = useState("");
+  const [editing, setEditing] = useState<Item | null>(null);
 
   async function toggle(d: Dish) {
     setBusy(d.id);
@@ -156,6 +162,19 @@ export default function MenuTable({
                       >
                         {d.available ? "Disponible" : "Agotado"}
                       </button>
+
+                      {/* Everything beyond the sold-out toggle is the owner's:
+                          price, photo, description, and the choices a customer
+                          gets. RLS refuses the writes to staff regardless. */}
+                      {owner && (
+                        <button
+                          onClick={() => setEditing(d as unknown as Item)}
+                          className="ml-2 px-3 py-1 rounded-full text-xs font-bold"
+                          style={{ background: "var(--yellow)", color: "#0A0B0E" }}
+                        >
+                          Editar
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -169,6 +188,15 @@ export default function MenuTable({
         <p className="py-10 text-center text-sm" style={{ color: "var(--faint)" }}>
           El menú aún no se ha importado a la base de datos.
         </p>
+      )}
+
+      {editing && (
+        <ItemEditor
+          item={editing}
+          categories={categories}
+          onClose={() => setEditing(null)}
+          onSaved={onChanged}
+        />
       )}
     </>
   );

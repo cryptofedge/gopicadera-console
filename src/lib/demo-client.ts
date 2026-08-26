@@ -61,6 +61,18 @@ class Query implements PromiseLike<{ data: unknown; error: null }> {
 
   private rows(): Row[] {
     let out = (store[this.table] ?? []).filter((r) => this.filters.every((f) => matches(r, f)));
+
+    // PostgREST embeds a child table when the select asks for it. The fixtures
+    // keep option_choices in their own array, so join them on the way out
+    // rather than duplicating every choice inside its group.
+    if (this.table === "option_groups") {
+      out = out.map((g) => ({
+        ...g,
+        option_choices: (store.option_choices ?? [])
+          .filter((c) => c.group_id === g.id)
+          .sort((a, b) => Number(a.sort) - Number(b.sort)),
+      }));
+    }
     if (this.sortBy) {
       const { col, asc } = this.sortBy;
       out = [...out].sort((a, b) => {
@@ -90,7 +102,7 @@ class Mutation implements PromiseLike<{ data: unknown; error: null }> {
   private inserted: Row[] = [];
   constructor(
     private table: string,
-    private kind: "update" | "insert" | "upsert",
+    private kind: "update" | "insert" | "upsert" | "delete",
     private payload: Row | Row[],
   ) {}
 
@@ -103,6 +115,18 @@ class Mutation implements PromiseLike<{ data: unknown; error: null }> {
 
   private apply() {
     const list = (store[this.table] ??= []);
+
+    if (this.kind === "delete") {
+      const keep = list.filter((r) => !this.filters.every((f) => matches(r, f)));
+      store[this.table] = keep;
+      // Deleting an option group takes its choices with it, the same as the
+      // foreign key's `on delete cascade` does.
+      if (this.table === "option_groups") {
+        const gone = list.filter((r) => this.filters.every((f) => matches(r, f))).map((r) => r.id);
+        store.option_choices = (store.option_choices ?? []).filter((c) => !gone.includes(c.group_id));
+      }
+      return;
+    }
 
     if (this.kind === "update") {
       // Moving a ticket stamps whoever moved it, the same as the database
@@ -192,6 +216,7 @@ export function demoClient() {
         update: (payload: Row) => new Mutation(table, "update", payload),
         insert: (payload: Row | Row[]) => new Mutation(table, "insert", payload),
         upsert: (payload: Row | Row[]) => new Mutation(table, "upsert", payload),
+        delete: () => new Mutation(table, "delete", {}),
       };
     },
 
@@ -221,6 +246,30 @@ export function demoClient() {
       onAuthStateChange(cb: () => void) {
         listeners.add(cb);
         return { data: { subscription: { unsubscribe: () => listeners.delete(cb) } } };
+      },
+    },
+
+    /**
+     * Storage, faked with an object URL.
+     *
+     * The demo has no bucket to upload to, but the client will absolutely try
+     * the "Subir foto" button — and a picker that accepts a file and then shows
+     * nothing reads as broken. The chosen file is turned into a local URL so the
+     * new photo appears immediately, for as long as the page stays open.
+     */
+    storage: {
+      from() {
+        let lastUrl = "";
+        return {
+          async upload(path: string, file: File) {
+            await new Promise((r) => setTimeout(r, 600));
+            lastUrl = URL.createObjectURL(file);
+            return { data: { path }, error: null };
+          },
+          getPublicUrl() {
+            return { data: { publicUrl: lastUrl } };
+          },
+        };
       },
     },
 

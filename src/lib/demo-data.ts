@@ -51,11 +51,11 @@ export const seed = {
   ],
 
   products: [
-    { id: "p1",  slug: "empanadas",     name: "Empanadas",            price: 3.5,  available: true,  featured: true,  sort: 1,  category_id: "c1", categories: { slug: "picadera", name_es: "Picadera" } },
+    { id: "p1",  slug: "empanadas",     name: "Empanadas",            desc_es: "Pollo, res, queso o jamón con queso.", desc_en: "Chicken, beef, cheese or ham and cheese.", image_path: null, price: 3.5,  available: true,  featured: true,  sort: 1,  category_id: "c1", categories: { slug: "picadera", name_es: "Picadera" } },
     { id: "p2",  slug: "pastelitos",    name: "Pastelitos",           price: 3.5,  available: true,  featured: false, sort: 2,  category_id: "c1", categories: { slug: "picadera", name_es: "Picadera" } },
     { id: "p3",  slug: "quipes",        name: "Quipes",               price: 3.0,  available: true,  featured: false, sort: 3,  category_id: "c1", categories: { slug: "picadera", name_es: "Picadera" } },
     { id: "p4",  slug: "chicharron",    name: "Chicharrón de cerdo",  price: 12.0, available: true,  featured: true,  sort: 4,  category_id: "c1", categories: { slug: "picadera", name_es: "Picadera" } },
-    { id: "p5",  slug: "mofongo",       name: "Mofongo",              price: 14.0, available: true,  featured: true,  sort: 5,  category_id: "c2", categories: { slug: "platos",   name_es: "Platos" } },
+    { id: "p5",  slug: "mofongo",       name: "Mofongo",              desc_es: "Plátano majado con ajo y chicharrón.", desc_en: "Mashed plantain with garlic and pork.", image_path: null, price: 14.0, available: true,  featured: true,  sort: 5,  category_id: "c2", categories: { slug: "platos",   name_es: "Platos" } },
     { id: "p6",  slug: "pernil",        name: "Pernil",               price: 13.0, available: true,  featured: false, sort: 6,  category_id: "c2", categories: { slug: "platos",   name_es: "Platos" } },
     { id: "p7",  slug: "pollo-guisado", name: "Pollo guisado",        price: 11.5, available: true,  featured: false, sort: 7,  category_id: "c2", categories: { slug: "platos",   name_es: "Platos" } },
     { id: "p8",  slug: "res-guisada",   name: "Res guisada",          price: 13.5, available: false, featured: false, sort: 8,  category_id: "c2", categories: { slug: "platos",   name_es: "Platos" } },
@@ -149,6 +149,26 @@ export const seed = {
     { kind: "ads", provider: "google_ads", status: "pending",      store_id: null,        client_id: null,        has_secret: false, last_order_at: null,        last_error: null, auto_accept: false },
     { kind: "ads", provider: "tiktok_ads", status: "disconnected", store_id: null,        client_id: null,        has_secret: false, last_order_at: null,        last_error: null, auto_accept: false },
     { kind: "pos", provider: "lightspeed", status: "disconnected", store_id: null,         client_id: null,         has_secret: false, last_order_at: null,        last_error: null, auto_accept: false },
+  ] as Record<string, unknown>[],
+
+  categories: [
+    { id: "c1", slug: "picadera", name_es: "Picadera", sort: 1 },
+    { id: "c2", slug: "platos",   name_es: "Platos",   sort: 2 },
+    { id: "c3", slug: "acomp",    name_es: "Acompañantes", sort: 3 },
+    { id: "c4", slug: "bebidas",  name_es: "Bebidas",  sort: 4 },
+  ] as Record<string, unknown>[],
+
+  option_groups: [
+    { id: "g1", product_id: "p1", key: "relleno", label_es: "Relleno", label_en: "Filling", sort: 0 },
+    { id: "g2", product_id: "p5", key: "carne",   label_es: "Carne",   label_en: "Meat",    sort: 0 },
+  ] as Record<string, unknown>[],
+
+  option_choices: [
+    { id: "oc1", group_id: "g1", label_es: "Pollo", label_en: "Chicken", price_delta: 0,   quiet: false, sort: 0 },
+    { id: "oc2", group_id: "g1", label_es: "Res",   label_en: "Beef",    price_delta: 2,   quiet: false, sort: 1 },
+    { id: "oc3", group_id: "g1", label_es: "Queso", label_en: "Cheese",  price_delta: 0,   quiet: false, sort: 2 },
+    { id: "oc4", group_id: "g2", label_es: "Chicharrón", label_en: "Pork", price_delta: 0, quiet: false, sort: 0 },
+    { id: "oc5", group_id: "g2", label_es: "Camarón",    label_en: "Shrimp", price_delta: 3, quiet: false, sort: 1 },
   ] as Record<string, unknown>[],
 
   campaign_jobs: [] as Record<string, unknown>[],
