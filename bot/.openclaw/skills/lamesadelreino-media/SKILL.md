@@ -27,6 +27,16 @@ rendering legible text inside an image.** For this channel that is the whole
 job. A thumbnail is four words at 200 pixels wide, and models that garble text
 are useless no matter how good the picture is.
 
+`gemini-3.1-flash-image` is cheaper and quicker. Use it for volume — draft
+quote cards, variations to choose between — and switch to the pro model for
+anything where the text has to be perfect, which means every thumbnail.
+
+**Image generation needs billing enabled on the Google Cloud project behind
+the key.** There is no free quota for it: a key with billing off returns
+`RESOURCE_EXHAUSTED` on every image model while text and embeddings keep
+working normally. If you hit that error, the key is fine and billing is the
+problem — say so plainly instead of retrying or blaming the prompt.
+
 ### What gets made, and at what size
 
 | Piece | Size | Notes |
