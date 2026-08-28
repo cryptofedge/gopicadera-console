@@ -1,0 +1,6 @@
+Source: https://github.com/gitroomhq/postiz-agent
+Commit: 77d09c6 (2026-08-23)
+License: AGPL-3.0 (Copyright 2024 Nevo David) - see LICENSE
+
+Only SKILL.md was taken. It is documentation; the postiz CLI it drives is
+installed from npm at runtime. No scripts or binaries were copied.
