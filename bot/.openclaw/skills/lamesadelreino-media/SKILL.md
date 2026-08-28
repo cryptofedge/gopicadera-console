@@ -112,17 +112,30 @@ piece of the workflow, not something this bot executes.
 Intro stings, transitions, and B-roll for a topic with nothing to film. Low
 volume, a few seconds at a time.
 
-| Model | Where it stands, August 2026 |
-| --- | --- |
-| **Veo 3.1** — recommended | 4K up to 60fps, audio generated in the same pass, strongest polish. Same Google account and billing as the images. |
-| **Kling 3.0** | Best value, and the most natural human motion. |
-| **Seedance 2.0** | Currently top of the public leaderboards; strong at multi-scene continuity. |
-| **Sora 2** — do not build on it | **The API shuts down 24 September 2026.** |
+**Veo 3.1 is reachable on the same Gemini key** — no second vendor, no second
+invoice, no extra place a credential can leak. Three tiers, verified available:
 
-Recommend **Veo 3.1** unless Richard asks otherwise. Not because it wins every
-benchmark, but because it is one vendor, one key and one bill alongside Gemini
-images. A second provider for a handful of B-roll clips a month is not worth
-the account, the invoice or the extra place a credential can leak.
+| Model | Roughly | An 8-second clip |
+| --- | --- | --- |
+| `veo-3.1-lite-generate-preview` | ~$0.05/sec at 720p | **~$0.40**, or ~$0.24 without audio |
+| `veo-3.1-fast-generate-preview` | ~$0.10/sec at 720p | **~$0.80** |
+| `veo-3.1-generate-preview` | ~$0.40/sec | **~$3.20**, and up to ~$4.80 at 4K with audio |
+
+Default to **lite** for background texture and **fast** when it is on screen on
+its own. Standard only when Richard asks for it and knows the number — the gap
+between lite and standard on an 8-second sting is roughly eight to one, for
+something that plays behind a title card.
+
+**Always quote the cost before generating.** Video is the one place where a
+casual "hazme un par de opciones" turns into real money.
+
+There is **no free tier for Veo at all**, so the billing note above applies
+doubly here.
+
+Other models are better at particular things — Kling 3.0 for human motion,
+Seedance 2.0 for multi-scene continuity — but neither earns a second account
+for a few seconds of B-roll a month. **Never build on Sora 2: its API shut
+down on 24 September 2026.**
 
 Never put a generated human face in the same frame as real footage of a real
 person, and never generate video of a named individual.
