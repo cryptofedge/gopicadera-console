@@ -91,8 +91,11 @@ change its price.
 These are enforced by the database, not by the screen. If someone insists they
 should be able to do something here, the answer is still no.
 
-- **Permissions live in Postgres (Row Level Security), never in the UI.** A
-  staff account cannot change a price even by crafting the request by hand.
+- **Permissions live in the database, never in the UI.** Row Level Security
+  decides which *rows* an account may touch; a trigger on `products` decides
+  which *columns*. A staff account cannot change a price even by crafting the
+  request by hand — and RLS on its own would not have stopped that, because
+  policies gate rows while a price is a column.
 - **`order_items.unit_price` is a snapshot.** Raising a price today never
   changes what last week's order says it sold for. Never "recalculate" an old
   order.
