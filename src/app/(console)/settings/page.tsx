@@ -64,7 +64,7 @@ function RobotBalance() {
     <div className="rounded-xl border p-4 max-w-2xl mb-5"
          style={{ background: "var(--surface)", borderColor: "var(--line)" }}>
       <h2 className="text-xs font-bold uppercase tracking-wider mb-3"
-          style={{ color: "var(--muted)" }}>Balance del Robot GoPicadera</h2>
+          style={{ color: "var(--muted)" }}>Gasto estimado del Robot GoPicadera</h2>
 
       <div className="flex items-baseline gap-2 mb-2 flex-wrap">
         <span className="text-2xl font-black nums"
@@ -111,8 +111,12 @@ function RobotBalance() {
       </form>
 
       <p className="text-xs mt-3" style={{ color: "var(--faint)" }}>
-        El tope lo pones tú. El Robot reporta su propio gasto una vez al día —
-        la consola nunca guarda la llave.
+        El tope lo pones tú. El Robot calcula su propio gasto y lo reporta una
+        vez al día — la consola nunca guarda la llave.
+      </p>
+      <p className="text-xs mt-1.5" style={{ color: "var(--faint)" }}>
+        Es un <b>estimado</b>: el Robot cuenta sus propios tokens y les pone
+        precio. La factura de verdad está en la cuenta del proveedor.
       </p>
     </div>
   );
