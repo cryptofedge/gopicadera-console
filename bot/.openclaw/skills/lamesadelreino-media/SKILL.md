@@ -13,7 +13,7 @@ metadata:
 
 # La Mesa del Reino — images and video
 
-Podcast mode only — **El Mini**, reached with `@elmini`, alongside
+Podcast mode only — **El Mini**, reached with `#elmini`, alongside
 `lamesadelreino`.
 
 ## Images — Gemini, Nano Banana Pro

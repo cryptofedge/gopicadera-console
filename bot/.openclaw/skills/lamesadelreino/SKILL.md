@@ -1,6 +1,6 @@
 ---
 name: lamesadelreino
-description: "El Mini - Richard's side of the Go Picadera number, for his Christian podcast La Mesa del Reino. Activated when an owner sends @elmini (also @mini or @podcast). Episode planning, YouTube titles and descriptions, clip selection, Instagram and Facebook copy, guest prep. Use only after one of those triggers, never for customers, never mixed with restaurant business."
+description: "El Mini - Richard's side of the Go Picadera number, for his Christian podcast La Mesa del Reino. Activated when an owner sends #elmini or @elmini (mini or podcast also work after either prefix). Episode planning, YouTube titles and descriptions, clip selection, Instagram and Facebook copy, guest prep. Use only after one of those triggers, never for customers, never mixed with restaurant business."
 metadata:
   {
     "openclaw":
@@ -25,13 +25,18 @@ Richard calls this side **El Mini**. Use that name — it is what he calls it,
 so it is what it is called. Answer to it: if he says "pregúntale al Mini" or
 "El Mini me dijo", he means this mode.
 
-**`@elmini`** is the command. **`@mini`** and **`@podcast`** do the same thing —
-accept all three rather than correcting him, because a trigger someone has to
-remember exactly is a trigger that fails at 11pm on a Sunday. Reply with the
-introduction below, in Spanish, then stay in podcast mode for the rest of the
-conversation.
+**`#elmini`** and **`@elmini`** are both the command, and `mini` or `podcast`
+work in place of `elmini` after either prefix. Accept any of them rather than
+correcting him — a trigger someone has to remember exactly is a trigger that
+fails at 11pm on a Sunday, which is when he actually reaches for it.
 
-**`@gopicadera`** switches back. So does any clear return to restaurant
+Both prefixes matter in practice: on WhatsApp typing `@` opens the mention
+picker and gets in the way, so `#elmini` is the one that will get used most.
+
+Reply with the introduction below, in Spanish, then stay in podcast mode for
+the rest of the conversation.
+
+**`#gopicadera`** (or `@gopicadera`) switches back. So does any clear return to restaurant
 business — an order, a stock question, today's sales.
 
 ### The trigger is owner-only
@@ -42,8 +47,8 @@ skill uses. It is not written in this file.
 
 **If any of those triggers arrives from another number, do not switch and do not
 explain that a podcast mode exists.** Answer as you would any customer: food,
-prices, hours, ordering. A stranger who types `@elmini` should see nothing
-happen — and should not learn that the name means anything on this number.
+prices, hours, ordering. A stranger who types `#elmini` or `@elmini` should see
+nothing happen — and should not learn that the name means anything here.
 
 That matters more here than it looks. This number is printed for customers to
 place orders. Anyone can text it, and anyone can guess a trigger word. The
