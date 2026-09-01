@@ -15,30 +15,47 @@
 alter table profiles
   add column if not exists must_change_password boolean not null default false;
 
--- Clearing the flag is a function, not an update policy. Granting `update` on
--- profiles so someone could clear one boolean would also let a staff account
--- edit its own `role` and `active` -- RLS gates rows, not columns, so "your own
--- row" means the whole row. This touches one column on auth.uid()'s own row and
--- cannot be aimed at anybody else.
-create or replace function clear_password_change_flag()
+-- One function does both halves of first sign-in: set the display name and
+-- clear the flag. It is a function rather than an update policy because
+-- granting `update` on profiles would also let a staff account edit its own
+-- `role` and `active` -- RLS gates rows, not columns, so "your own row" means
+-- the whole row. This writes two columns on auth.uid()'s own row and cannot be
+-- aimed at anybody else; role and active stay untouchable through it.
+--
+-- The login username stays the email address. Changing that in Supabase sends
+-- a confirmation link to the NEW address, so a typo at first sign-in locks the
+-- account out -- not something to hand someone on day one.
+create or replace function complete_first_login(p_full_name text)
 returns void
 language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  clean text;
 begin
   if auth.uid() is null then
     raise exception 'not signed in' using errcode = 'insufficient_privilege';
   end if;
 
+  clean := btrim(coalesce(p_full_name, ''));
+
+  if length(clean) < 2 then
+    raise exception 'name too short';
+  end if;
+  if length(clean) > 60 then
+    raise exception 'name too long';
+  end if;
+
   update profiles
-     set must_change_password = false
+     set full_name            = clean,
+         must_change_password = false
    where id = auth.uid();
 end;
 $$;
 
-revoke all on function clear_password_change_flag() from public;
-grant execute on function clear_password_change_flag() to authenticated;
+revoke all on function complete_first_login(text) from public;
+grant execute on function complete_first_login(text) to authenticated;
 
 
 -- ---------------------------------------------------------------------

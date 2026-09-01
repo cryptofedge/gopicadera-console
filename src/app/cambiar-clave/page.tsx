@@ -22,6 +22,7 @@ const MIN = 8;
 export default function CambiarClavePage() {
   const router = useRouter();
   const { profile, refresh, signOut } = useSession();
+  const [name, setName] = useState(profile?.full_name ?? "");
   const [pass, setPass] = useState("");
   const [again, setAgain] = useState("");
   const [error, setError] = useState("");
@@ -31,6 +32,10 @@ export default function CambiarClavePage() {
     e.preventDefault();
     setError("");
 
+    if (name.trim().length < 2) {
+      setError("Escribe tu nombre.");
+      return;
+    }
     if (pass.length < MIN) {
       setError(`La contraseña debe tener al menos ${MIN} caracteres.`);
       return;
@@ -60,7 +65,9 @@ export default function CambiarClavePage() {
     // Only clear the flag once the password actually changed. Doing it first
     // would leave an account marked "done" with the temporary password still
     // working if the update failed.
-    const { error: rpcErr } = await sb.rpc("clear_password_change_flag");
+    const { error: rpcErr } = await sb.rpc("complete_first_login", {
+      p_full_name: name.trim(),
+    });
     if (rpcErr) {
       setError(
         "La contraseña se cambió, pero no pudimos guardar el estado. Vuelve a entrar.",
@@ -95,12 +102,33 @@ export default function CambiarClavePage() {
         />
 
         <h1 className="font-black text-2xl tracking-tight mb-2 text-center">
-          Crea tu contraseña
+          Configura tu cuenta
         </h1>
         <p className="text-sm mb-7 text-center" style={{ color: "var(--muted)" }}>
-          {profile?.full_name ? `Hola ${profile.full_name}. ` : ""}
-          Entraste con una contraseña temporal. Escoge una tuya para seguir —
-          nadie más la va a saber.
+          Entraste con una contraseña temporal. Escoge tu nombre y una
+          contraseña tuya para seguir — nadie más la va a saber.
+        </p>
+
+        <label
+          htmlFor="name"
+          className="block text-xs font-semibold uppercase tracking-wider mb-1.5"
+          style={{ color: "var(--faint)" }}
+        >
+          Tu nombre
+        </label>
+        <input
+          id="name"
+          type="text"
+          value={name}
+          required
+          maxLength={60}
+          autoComplete="name"
+          onChange={(e) => setName(e.target.value)}
+          className="w-full mb-2 px-4 py-3 rounded-xl border outline-none text-base"
+          style={field}
+        />
+        <p className="text-xs mb-5" style={{ color: "var(--faint)" }}>
+          Así apareces en la consola y en los pedidos que atiendas.
         </p>
 
         <label
