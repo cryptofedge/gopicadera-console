@@ -65,7 +65,6 @@ grant execute on function complete_first_login(text) to authenticated;
 --    below has no account yet, that line simply does nothing -- create the
 --    user first, then re-run.
 --
---    >>> REPLACE Richard's email before running. <<<
 -- ---------------------------------------------------------------------
 insert into profiles (id, full_name, role, active, must_change_password)
 select u.id, 'Llulisa', 'owner', true, true
@@ -80,7 +79,7 @@ on conflict (id) do update
 insert into profiles (id, full_name, role, active, must_change_password)
 select u.id, 'Richard', 'owner', true, true
   from auth.users u
- where lower(u.email) = lower('RICHARD-EMAIL-HERE@example.com')
+ where lower(u.email) = lower('Richardautogroup19@gmail.com')
 on conflict (id) do update
   set full_name            = excluded.full_name,
       role                 = 'owner',
