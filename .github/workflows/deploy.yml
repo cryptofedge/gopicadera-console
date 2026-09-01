@@ -43,13 +43,21 @@ jobs:
         run: |
           [ -n "$SUPA_URL" ] || { echo "::error::Repository secret NEXT_PUBLIC_SUPABASE_URL is not set."; exit 1; }
           [ -n "$SUPA_KEY" ] || { echo "::error::Repository secret NEXT_PUBLIC_SUPABASE_ANON_KEY is not set."; exit 1; }
+          # Two shapes are valid. `eyJ...` is the legacy JWT anon key; Supabase
+          # now issues `sb_publishable_...` instead and calls the old one
+          # compatibility-only. Accepting only the legacy shape would reject the
+          # key this project actually uses.
           case "$SUPA_KEY" in
-            eyJ*) ;;
-            *) echo "::error::NEXT_PUBLIC_SUPABASE_ANON_KEY does not look like a Supabase key (expected it to start with eyJ)."; exit 1 ;;
+            eyJ*|sb_publishable_*) ;;
+            *) echo "::error::NEXT_PUBLIC_SUPABASE_ANON_KEY does not look like a Supabase publishable/anon key (expected eyJ... or sb_publishable_...)."; exit 1 ;;
           esac
 
       - run: npm run build
         env:
+          # The console is served at admin.gopicadera.com, a domain root, so
+          # nothing should be prefixed with the repo name.
+          NEXT_BASE_PATH: ""
+
           # NEXT_PUBLIC_* values are compiled into the JavaScript at build time,
           # not read at runtime — which is why they belong here and not in some
           # runtime config. The anon key is public by design; Row Level Security
@@ -65,6 +73,12 @@ jobs:
             exit 1
           fi
           test -f out/.nojekyll || { echo "::error::out/.nojekyll missing — Jekyll will strip the _next directory."; exit 1; }
+
+      # deploy-pages replaces the whole site each run, so the custom domain has
+      # to ship inside the artifact or Pages forgets it and reverts to
+      # cryptofedge.github.io/gopicadera-console.
+      - name: Keep the custom domain
+        run: echo "admin.gopicadera.com" > out/CNAME
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
