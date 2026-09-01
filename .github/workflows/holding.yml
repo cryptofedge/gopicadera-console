@@ -7,9 +7,11 @@ name: Publish holding page + demo
 # The demo build needs no Supabase key — NEXT_PUBLIC_DEMO=1 swaps the Supabase
 # client for an in-memory stand-in — so this ships while the real project is
 # still being wired up. deploy.yml replaces all of it once the key exists.
+# Manual only. This ran on every push and republished the holding page over
+# the real console -- the client opened admin.gopicadera.com and saw
+# "en construcción" instead of the login. deploy.yml owns the site now that
+# the Supabase key exists; this is kept only to rebuild the demo on request.
 on:
-  push:
-    branches: [master]
   workflow_dispatch:
 
 permissions:

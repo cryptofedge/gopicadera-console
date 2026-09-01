@@ -2,10 +2,12 @@ name: Deploy console to GitHub Pages
 
 # Builds the static export and publishes it. Pages must be set to build from
 # "GitHub Actions" (Settings -> Pages -> Source), not from a branch.
-# Manual only, for now. Until the Supabase anon key exists this workflow
-# cannot succeed, and firing it on every push would paint the repo red and
-# bury genuine failures. Switch back to `push` once the key is set.
+# The Supabase key is set, so this runs on every push and is what the site
+# serves. It must stay the last workflow to publish -- anything else that
+# deploys Pages will replace the console with its own output.
 on:
+  push:
+    branches: [master]
   workflow_dispatch:
 
 permissions:
