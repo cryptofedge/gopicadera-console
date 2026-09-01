@@ -19,7 +19,7 @@ export const DEMO_USERS = [
     password: "Richard2026",
     full_name: "Richard (Dueño)",
     role: "owner" as const,
-    active: true,
+    active: true, must_change_password: false,
   },
   {
     id: "demo-owner-2",
@@ -27,7 +27,7 @@ export const DEMO_USERS = [
     password: "Llulisa2026",
     full_name: "Llulisa (Dueña)",
     role: "owner" as const,
-    active: true,
+    active: true, must_change_password: false,
   },
   {
     id: "demo-staff",
@@ -35,7 +35,7 @@ export const DEMO_USERS = [
     password: "Yudelka2026",
     full_name: "Yudelka (Staff)",
     role: "staff" as const,
-    active: true,
+    active: true, must_change_password: false,
   },
 ];
 
@@ -43,10 +43,10 @@ const STAFF = ["Yudelka Objío", "Luis Peña"];
 
 export const seed = {
   profiles: [
-    { id: "demo-owner", full_name: "Richard", role: "owner", active: true, created_at: daysAgo(220) },
-    { id: "demo-owner-2", full_name: "Llulisa", role: "owner", active: true, created_at: daysAgo(220) },
-    { id: "demo-staff", full_name: "Yudelka Objío", role: "staff", active: true, created_at: daysAgo(64) },
-    { id: "demo-3", full_name: "Luis Peña", role: "staff", active: true, created_at: daysAgo(21) },
+    { id: "demo-owner", full_name: "Richard", role: "owner", active: true, must_change_password: false, created_at: daysAgo(220) },
+    { id: "demo-owner-2", full_name: "Llulisa", role: "owner", active: true, must_change_password: false, created_at: daysAgo(220) },
+    { id: "demo-staff", full_name: "Yudelka Objío", role: "staff", active: true, must_change_password: false, created_at: daysAgo(64) },
+    { id: "demo-3", full_name: "Luis Peña", role: "staff", active: true, must_change_password: false, created_at: daysAgo(21) },
     { id: "demo-4", full_name: "Carmen Batista", role: "staff", active: false, created_at: daysAgo(200) },
   ],
 

@@ -29,6 +29,12 @@ function Guard({ children }: { children: React.ReactNode }) {
       router.replace(`/login?next=${encodeURIComponent(path)}`);
       return;
     }
+    // A temporary password is still a password somebody else knows. Nothing
+    // else in the console opens until it has been replaced.
+    if (profile.must_change_password) {
+      router.replace("/cambiar-clave");
+      return;
+    }
     if (profile.role !== "owner" && OWNER_ONLY.some((p) => path.startsWith(p))) {
       router.replace("/orders?denied=1");
     }
@@ -44,7 +50,13 @@ function Guard({ children }: { children: React.ReactNode }) {
     );
   }
 
-  // Redirect is queued but has not run yet — do not paint an owner page for a
+  // Redirect is queued but has not run yet — do not paint the console for
+  // someone who is on their way to the password screen.
+  if (profile.must_change_password) {
+    return null;
+  }
+
+  // Same reasoning for the owner-only routes: do not paint an owner page for a
   // staff account, however briefly.
   if (profile.role !== "owner" && OWNER_ONLY.some((p) => path.startsWith(p))) {
     return null;

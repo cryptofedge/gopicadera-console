@@ -29,6 +29,8 @@ export type Profile = {
   full_name: string | null;
   role: Role;
   active: boolean;
+  /** Set when the account was handed out with a temporary password. */
+  must_change_password: boolean;
 };
 
 type SessionState = {
@@ -67,7 +69,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
 
     const { data } = await sb
       .from("profiles")
-      .select("id, full_name, role, active")
+      .select("id, full_name, role, active, must_change_password")
       .eq("id", user.id)
       .single();
 
