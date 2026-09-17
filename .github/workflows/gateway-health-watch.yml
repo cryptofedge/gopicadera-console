@@ -1,0 +1,35 @@
+name: Gateway Health Watch
+
+# External uptime check for the Go Picadera / La Mesa del Reino WhatsApp bot
+# gateway on Railway. Runs on GitHub's infrastructure, independent of Railway
+# and independent of any local machine -- this is what still catches a
+# problem if Railway itself suspends or crashes the whole container (e.g.
+# billing lapse), a case the bot's own internal health checks can't report
+# on since they run inside that same container.
+#
+# On failure this workflow run is marked failed, which GitHub emails to the
+# repo's watchers by default (Settings > Notifications > Actions).
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check gateway reachability
+        run: |
+          URL="https://clawdbot-railway-template-production-8925.up.railway.app/"
+          for attempt in 1 2 3; do
+            CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 "$URL" || echo "000")
+            echo "Attempt $attempt: HTTP $CODE"
+            if [ "$CODE" != "000" ]; then
+              echo "Gateway is reachable (HTTP $CODE) -- any real HTTP response, including 401, means the container is up."
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "::error::Gateway unreachable after 3 attempts over ~1 minute. This means no HTTP response at all -- the Railway container is likely down, suspended, or crashed, not just a single flaky request."
+          exit 1
