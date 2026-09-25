@@ -1,8 +1,9 @@
 # Card payments (Stripe), test mode first
 
-Status: built and tested locally, **not deployed**. Nothing here is live until you do the steps below.
-The storefront's card button is hidden for customers; it only appears when the page is opened with `?card=test`.
-Cash and WhatsApp ordering are untouched by all of this.
+Status (2026-09-25): the database migration is applied and all three functions are deployed, but `create-checkout`
+and `stripe-webhook` have no Stripe keys yet, so they safely refuse everything (`503 not_configured`) — no card
+payment can go through until step 1 and step 3 below happen. The storefront's card button is hidden for
+customers; it only appears when the page is opened with `?card=test`. Cash and WhatsApp ordering are untouched.
 
 ## How it works
 
@@ -37,24 +38,22 @@ not match what the database priced.
 Nobody pastes a key into WhatsApp or chat. Keys go straight from the Stripe dashboard into the Supabase secrets command below.
 
 1. **Stripe access.** Llulisa already has the account. She invites Fellito as a Developer (Settings, Team). Both stay in
-   **Test mode** (the toggle at the top of the dashboard). Test mode moves no real money.
-2. **Database.** In Supabase (project `gopicadera`), SQL Editor, paste all of `stripe_payments.sql` and run it. Expect "Success. No rows returned".
+   **Test mode** (the toggle at the top of the dashboard). Test mode moves no real money. **Not done yet — this is what
+   everything else below is waiting on.**
+2. ~~**Database.**~~ Done 2026-09-25: `stripe_payments.sql` is applied. (To redo or check: `supabase db query --linked
+   --project-ref kfuamhhfthfmavxppagb --file backend/stripe_payments.sql` runs it against the real database through
+   the CLI's logged-in session — no separate database password needed. Safe to run again if ever in doubt.)
 3. **Secrets.** In Stripe (Test mode): Developers, API keys, copy the secret key (`sk_test_...`). Then:
    ```bash
    supabase secrets set STRIPE_SECRET_KEY=sk_test_XXXX SITE_URL=https://gopicadera.com --project-ref kfuamhhfthfmavxppagb
    ```
    `SITE_ORIGINS` is optional. It defaults to gopicadera.com, www.gopicadera.com and cryptofedge.github.io.
-4. **Deploy the functions.** `create-checkout` and `stripe-webhook` need `--no-verify-jwt` (Stripe and the storefront
-   cannot send a Supabase login). `stripe-status` is the opposite on purpose: leave `verify_jwt` **on** (the default,
-   so omit the flag), because it's the one only a signed-in console owner should reach.
-   ```bash
-   supabase functions deploy create-checkout --no-verify-jwt --project-ref kfuamhhfthfmavxppagb
-   supabase functions deploy stripe-webhook --no-verify-jwt --project-ref kfuamhhfthfmavxppagb
-   supabase functions deploy stripe-status --project-ref kfuamhhfthfmavxppagb
-   ```
-   Once deployed, the console's Integrations page shows a "Pagos en línea" card with a live status (sin configurar /
-   a medias / modo prueba / modo real) instead of the checklist below. `SUPABASE_URL`, `SUPABASE_ANON_KEY` and
-   `SUPABASE_SERVICE_ROLE_KEY` are auto-injected by Supabase; nothing extra to set for this one.
+4. ~~**Deploy the functions.**~~ Done 2026-09-25: all three are live (`create-checkout`, `stripe-webhook` with
+   `--no-verify-jwt`; `stripe-status` with `verify_jwt` on, checked with `supabase functions list`). The console's
+   Integrations page already shows a "Pagos en línea" card with a live status (sin configurar / a medias / modo
+   prueba / modo real). `create-checkout`/`stripe-webhook` currently answer every request with `503
+   {"error":"not_configured"}` until step 3 sets a key — verified with a plain `curl`, nothing needs redeploying once
+   the secrets land.
 5. **Webhook.** Stripe (Test mode): Developers, Webhooks, Add endpoint.
    URL: `https://kfuamhhfthfmavxppagb.supabase.co/functions/v1/stripe-webhook`
    Events: `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`,
