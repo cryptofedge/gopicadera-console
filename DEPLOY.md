@@ -64,7 +64,7 @@ gh repo edit cryptofedge/gopicadera-console --visibility public
 
 | Name | Value |
 | --- | --- |
-| `NEXT_PUBLIC_SUPABASE_URL` | `https://xjuwamydkrzxdxjezlwa.supabase.co` |
+| `NEXT_PUBLIC_SUPABASE_URL` | `https://kfuamhhfthfmavxppagb.supabase.co` |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | the anon / publishable key |
 
 The workflow fails deliberately if it builds with the placeholder key, rather

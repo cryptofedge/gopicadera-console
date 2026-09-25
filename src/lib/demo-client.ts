@@ -273,6 +273,30 @@ export function demoClient() {
       },
     },
 
+    // Edge Functions, faked for the one the console calls: the read-only Stripe status
+    // card on Integrations. The demo has no real Stripe project behind it, so it always
+    // reports "not configured" — true, and it exercises the same code path as production.
+    functions: {
+      async invoke(name: string) {
+        await new Promise((r) => setTimeout(r, 200));
+        if (name === "stripe-status") {
+          return {
+            data: {
+              status: "not_configured",
+              databaseApplied: false,
+              keysConfigured: false,
+              keyMode: null,
+              webhookConfigured: false,
+              liveAllowed: false,
+              missing: ["database", "stripe_key", "webhook"],
+            },
+            error: null,
+          };
+        }
+        return { data: null, error: { message: `demo: no function stub for "${name}"` } };
+      },
+    },
+
     // The order board subscribes to postgres_changes and reloads on any event.
     // Nothing external changes in a demo, so this is a no-op that satisfies the
     // same shape.

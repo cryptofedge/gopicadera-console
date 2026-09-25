@@ -174,6 +174,100 @@ const field = {
   color: "var(--text)",
 };
 
+/**
+ * Pago con tarjeta en la web (Stripe). This does not belong in the Provider/kind model above: Stripe is
+ * not a channel that brings in orders, and it is never OAuth or paste-a-key-here — the restaurant uses its
+ * own Stripe account directly, and the secret key lives only in Stripe and in the Edge Functions' own
+ * config, never in this browser or this database. So there is no Connect button and no form here, only a
+ * read-only status read from the stripe-status Edge Function (owner-only; never returns the key itself).
+ */
+type StripeStatusValue = "not_configured" | "partial" | "test" | "live" | "unknown";
+type StripeStatus = {
+  status: StripeStatusValue;
+  databaseApplied: boolean;
+  keysConfigured: boolean;
+  keyMode: "test" | "live" | "unknown" | null;
+  webhookConfigured: boolean;
+  liveAllowed: boolean;
+  missing: string[];
+};
+
+const STRIPE_STATUS_LABEL: Record<StripeStatusValue, string> = {
+  not_configured: "Sin configurar",
+  partial: "A medias",
+  test: "Modo prueba",
+  live: "Modo real",
+  unknown: "Clave con formato raro",
+};
+const STRIPE_STATUS_COLOR: Record<StripeStatusValue, string> = {
+  not_configured: "var(--faint)",
+  partial: "var(--yellow)",
+  test: "var(--yellow)",
+  live: "var(--green)",
+  unknown: "var(--red)",
+};
+const STRIPE_MISSING_LABEL: Record<string, string> = {
+  database: "aplicar stripe_payments.sql en la base de datos",
+  stripe_key: "poner la clave secreta de Stripe",
+  webhook: "configurar el webhook de Stripe",
+};
+
+function StripeStatusCard() {
+  const { data, loading, error } = useQuery<StripeStatus>(
+    (sb) => sb.functions.invoke("stripe-status") as never,
+  );
+
+  return (
+    <section className="mb-7">
+      <h2 className="text-xs font-bold uppercase tracking-wider mb-1 pb-1 border-b"
+          style={{ color: "var(--muted)", borderColor: "var(--line)" }}>
+        Pagos en línea
+      </h2>
+      <p className="text-xs mb-3" style={{ color: "var(--faint)" }}>
+        El pago con tarjeta en la página web. No hay botón para conectar aquí a propósito: Stripe usa tu
+        propia cuenta directamente, nunca una llave pegada en la consola. Se conecta invitando a Fellito
+        como Developer en Stripe (Configuración → Equipo → Invitar); él hace el resto.
+      </p>
+
+      <div className="rounded-xl border p-4 max-w-md"
+           style={{ background: "var(--surface)", borderColor: "var(--line)" }}>
+        {loading && <p className="text-xs" style={{ color: "var(--faint)" }}>Revisando…</p>}
+        {error && <p className="text-xs" style={{ color: "var(--red)" }}>{error}</p>}
+        {data && (
+          <>
+            <div className="flex items-center gap-2.5 mb-2">
+              <span className="w-2.5 h-2.5 rounded-full flex-none"
+                    style={{ background: STRIPE_STATUS_COLOR[data.status] }} />
+              <span className="font-bold">Stripe</span>
+              <span className="ml-auto text-[11px] font-bold uppercase tracking-wider"
+                    style={{ color: STRIPE_STATUS_COLOR[data.status] }}>
+                {STRIPE_STATUS_LABEL[data.status]}
+              </span>
+            </div>
+
+            {data.missing.length > 0 ? (
+              <p className="text-xs" style={{ color: "var(--muted)" }}>
+                Falta: {data.missing.map((m) => STRIPE_MISSING_LABEL[m] ?? m).join(", ")}.
+              </p>
+            ) : (
+              <p className="text-xs" style={{ color: "var(--muted)" }}>
+                Base de datos, clave y webhook están puestos.
+              </p>
+            )}
+
+            {data.status === "live" && !data.liveAllowed && (
+              <p className="text-xs mt-2" style={{ color: "var(--red)" }}>
+                Ojo: la clave puesta es de modo real, pero los cobros reales siguen apagados a propósito
+                (falta ALLOW_LIVE). Nadie puede cobrar de verdad todavía.
+              </p>
+            )}
+          </>
+        )}
+      </div>
+    </section>
+  );
+}
+
 export default function IntegrationsPage() {
   const { data, loading, error, reload } = useQuery<Row[]>(
     (sb) =>
@@ -256,6 +350,8 @@ export default function IntegrationsPage() {
       <p className="text-sm mb-6" style={{ color: "var(--muted)" }}>
         Todo lo que la consola conecta con el mundo de afuera.
       </p>
+
+      <StripeStatusCard />
 
 {SECTIONS.map((sec) => {
   const group = rows.filter((r) => r.kind === sec.kind);
