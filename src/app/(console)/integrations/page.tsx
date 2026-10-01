@@ -4,12 +4,15 @@
  * Everything this console connects to: delivery marketplaces, the point of
  * sale, and the WhatsApp number. Owner-only.
  *
- * Two kinds of connection live here, and the difference matters. Square, Clover
- * and Lightspeed offer real OAuth — one button, no keys ever in the owner's
- * hands. Uber Eats, DoorDash, Grubhub and Toast require the restaurant to be
- * approved as an API partner first, which then yields a store id and a key
- * pair to paste. The card says which it is rather than showing a Connect button
- * that cannot work yet.
+ * None of these are real click-to-connect yet — every one of them requires the
+ * restaurant to be approved as a partner first (or, for Meta/TikTok, a real
+ * OAuth flow this console does not implement), which then yields a store id
+ * and a key pair to paste. `oauth: true` on a card is reserved for a provider
+ * this console can actually drive through a real OAuth redirect; until one is
+ * built, a card says what it actually needs rather than promising a button
+ * that cannot work yet. (That promise used to be made for Square, Clover,
+ * Meta and TikTok; it never matched what the code did, and that is the bug
+ * this comment is here to stop from coming back.)
  *
  * Secrets are write-only from here: once saved, the field shows that a key
  * exists and never its value. Staff cannot open this page at all, and RLS
@@ -41,9 +44,9 @@ type Row = {
 
 /**
  * `oauth: true` means the provider genuinely supports click-to-connect and the
- * owner never handles a key. The rest require the restaurant to be approved as
- * a partner first, which is a business step no amount of code shortens — so the
- * card says so instead of pretending otherwise.
+ * owner never handles a key. As of now that is none of them: every provider
+ * below needs approval, a real OAuth integration this console does not have
+ * yet, or both — so the card says so instead of pretending otherwise.
  */
 const META: Record<Provider, { name: string; blurb: string; portal: string; color: string; oauth?: boolean }> = {
   ubereats: {
@@ -73,17 +76,15 @@ const META: Record<Provider, { name: string; blurb: string; portal: string; colo
 
   square: {
     name: "Square",
-    blurb: "Conecta directo con tu cuenta de Square. Sincroniza menú, precios y ventas.",
+    blurb: "Pide la integración en el portal de desarrolladores de Square. Ellos aprueban y dan las llaves.",
     portal: "squareup.com",
     color: "#3E4348",
-    oauth: true,
   },
   clover: {
     name: "Clover",
-    blurb: "Conecta con tu cuenta de Clover desde aquí.",
+    blurb: "Pide acceso de API a Clover. Aprueban y dan un ID de app y una llave.",
     portal: "clover.com",
     color: "#0B7C3E",
-    oauth: true,
   },
   toast: {
     name: "Toast",
@@ -93,18 +94,16 @@ const META: Record<Provider, { name: string; blurb: string; portal: string; colo
   },
   lightspeed: {
     name: "Lightspeed",
-    blurb: "Conecta con tu cuenta de Lightspeed Restaurant.",
+    blurb: "Pide acceso de API a Lightspeed Restaurant. Aprueban y dan un ID y una llave.",
     portal: "lightspeedhq.com",
     color: "#F5344C",
-    oauth: true,
   },
 
   meta_ads: {
     name: "Meta",
-    blurb: "Facebook e Instagram. Conecta con tu cuenta de Meta Business.",
+    blurb: "Facebook e Instagram. La conexión directa con Meta Business todavía no está lista en esta consola.",
     portal: "business.facebook.com",
     color: "#0866FF",
-    oauth: true,
   },
   google_ads: {
     name: "Google Ads",
@@ -114,10 +113,9 @@ const META: Record<Provider, { name: string; blurb: string; portal: string; colo
   },
   tiktok_ads: {
     name: "TikTok",
-    blurb: "Conecta con tu cuenta de TikTok for Business.",
+    blurb: "La conexión directa con TikTok for Business todavía no está lista en esta consola.",
     portal: "business.tiktok.com",
     color: "#FE2C55",
-    oauth: true,
   },
 };
 
@@ -475,13 +473,15 @@ export default function IntegrationsPage() {
           Cómo se conecta cada uno
         </h2>
 
-        <p className="text-xs leading-relaxed mb-2" style={{ color: "var(--muted)" }}>
-          <strong style={{ color: "var(--text)" }}>
-            {oauthNames.join(", ")}
-          </strong>{" "}
-          se conectan con un botón: te mandan a tu propia cuenta, la autorizas y
-          listo. Nunca tienes que copiar una llave.
-        </p>
+        {oauthNames.length > 0 && (
+          <p className="text-xs leading-relaxed mb-2" style={{ color: "var(--muted)" }}>
+            <strong style={{ color: "var(--text)" }}>
+              {oauthNames.join(", ")}
+            </strong>{" "}
+            se conectan con un botón: te mandan a tu propia cuenta, la autorizas y
+            listo. Nunca tienes que copiar una llave.
+          </p>
+        )}
 
         <p className="text-xs leading-relaxed" style={{ color: "var(--muted)" }}>
           <strong style={{ color: "var(--text)" }}>
