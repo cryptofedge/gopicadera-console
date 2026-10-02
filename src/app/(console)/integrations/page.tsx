@@ -4,12 +4,11 @@
  * Everything this console connects to: delivery marketplaces, the point of
  * sale, and the WhatsApp number. Owner-only.
  *
- * Meta is the one provider with a real connection flow: the button below
- * calls a Supabase Edge Function that redirects to Meta's own consent screen,
- * and the callback stores the resulting long-lived token server-side — the
- * owner never sees or pastes a key. Everything else still requires the
- * restaurant to be approved as a partner first (or, for TikTok, a redirect
- * flow this console does not implement yet), which then yields a store id
+ * Meta and TikTok are the providers with a real connection flow: the button
+ * below calls a Supabase Edge Function that redirects to the platform's own
+ * consent screen, and the callback stores the resulting token server-side —
+ * the owner never sees or pastes a key. Everything else still requires the
+ * restaurant to be approved as a partner first, which then yields a store id
  * and a key pair to paste. `oauth: true` on a card is reserved for a provider
  * actually wired through a redirect like that; it used to be claimed for
  * Square, Clover, Meta and TikTok before any of them had one, and that
@@ -45,7 +44,7 @@ type Row = {
 
 /**
  * `oauth: true` means the provider genuinely supports click-to-connect and the
- * owner never handles a key. Right now that is Meta alone, through the
+ * owner never handles a key. Right now that is Meta and TikTok, through the
  * Edge Functions named by `startFn`. Everyone else below needs approval, a
  * real redirect-based connection this console does not have yet, or both —
  * so the card says so instead of pretending otherwise.
@@ -117,9 +116,11 @@ const META: Record<Provider, { name: string; blurb: string; portal: string; colo
   },
   tiktok_ads: {
     name: "TikTok",
-    blurb: "La conexión directa con TikTok for Business todavía no está lista en esta consola.",
+    blurb: "Conecta tu propia cuenta de TikTok for Business con un botón — nunca copias una llave.",
     portal: "business.tiktok.com",
     color: "#FE2C55",
+    oauth: true,
+    startFn: "tiktok-oauth-start",
   },
 };
 
@@ -285,7 +286,7 @@ export default function IntegrationsPage() {
   const [connecting, setConnecting] = useState<Provider | null>(null);
   const [banner, setBanner] = useState<{ ok: boolean; text: string } | null>(null);
 
-  // Meta's own redirect lands back here with ?oauth=meta&status=connected|error[&reason=...].
+  // Meta/TikTok's own redirect lands back here with ?oauth=meta|tiktok&status=connected|error[&reason=...].
   // Read it once, show it, then strip it from the URL so a refresh does not repeat the toast.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -293,7 +294,7 @@ export default function IntegrationsPage() {
     if (!provider) return;
     const status = params.get("status");
     const reason = params.get("reason");
-    const name = provider === "meta" ? "Meta" : provider;
+    const name = provider === "meta" ? "Meta" : provider === "tiktok" ? "TikTok" : provider;
     setBanner(
       status === "connected"
         ? { ok: true, text: `${name} quedó conectado.` }

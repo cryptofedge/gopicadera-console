@@ -79,3 +79,22 @@ export function metaAdAccountsUrl(accessToken: string): string {
   u.searchParams.set("fields", "account_id,name");
   return u.toString();
 }
+
+// ---------------------------------------------------------- TikTok (Business/Marketing API) ----
+// TikTok's token endpoint is versioned the same way Meta's Graph API is; pinned for the same reason.
+export const TIKTOK_TOKEN_VERSION = "v1.3";
+export const TIKTOK_TOKEN_URL = `https://business-api.tiktok.com/open_api/${TIKTOK_TOKEN_VERSION}/oauth2/access_token/`;
+
+export function tiktokAuthorizationUrl(appId: string, redirectUri: string, state: string): string {
+  const u = new URL("https://business-api.tiktok.com/portal/auth");
+  u.searchParams.set("app_id", appId);
+  u.searchParams.set("redirect_uri", redirectUri);
+  u.searchParams.set("state", state);
+  return u.toString();
+}
+
+// Unlike Meta's query-string GET, TikTok's token exchange is a POST with a JSON body -- this
+// returns the body, not a URL, so the caller can set the right method/headers.
+export function tiktokTokenExchangeBody(appId: string, appSecret: string, authCode: string): Record<string, string> {
+  return { app_id: appId, secret: appSecret, auth_code: authCode };
+}

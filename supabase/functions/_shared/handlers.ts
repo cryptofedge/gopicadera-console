@@ -2,7 +2,11 @@
 // tested end to end without Deno, a network, or a real Stripe/Meta account.
 import { buildCheckoutParams, corsHeaders, json, toFormBody, verifyStripeSignature } from "./stripe-lib.ts";
 import type { CheckoutOrder, Env } from "./stripe-lib.ts";
-import { metaAdAccountsUrl, metaAuthorizationUrl, metaCodeExchangeUrl, metaLongLivedExchangeUrl, signState, verifyState } from "./oauth-lib.ts";
+import {
+  metaAdAccountsUrl, metaAuthorizationUrl, metaCodeExchangeUrl, metaLongLivedExchangeUrl,
+  signState, verifyState,
+  tiktokAuthorizationUrl, tiktokTokenExchangeBody, TIKTOK_TOKEN_URL,
+} from "./oauth-lib.ts";
 
 export interface Deps {
   env: Env;
@@ -41,6 +45,8 @@ function config(env: Env) {
     oauthStateSecret: env.OAUTH_STATE_SECRET || "",
     metaAppId: env.META_APP_ID || "",
     metaAppSecret: env.META_APP_SECRET || "",
+    tiktokAppId: env.TIKTOK_APP_ID || "",
+    tiktokAppSecret: env.TIKTOK_APP_SECRET || "",
   };
 }
 
@@ -318,6 +324,97 @@ export async function handleMetaOAuthCallback(req: Request, deps: Deps): Promise
 
     await rpc(c, deps.fetch, "apply_oauth_connection", { p_provider: "meta_ads", p_access_token: accessToken, p_account_id: accountId });
     return backToConsole({ oauth: "meta", status: "connected" });
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : String(e));
+  }
+}
+
+export async function handleTiktokOAuthStart(req: Request, deps: Deps): Promise<Response> {
+  const c = config(deps.env);
+  const origin = req.headers.get("origin") || "";
+  const cors = corsHeaders(origin, c.adminOrigins);
+  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
+  if (req.method !== "GET" && req.method !== "POST") return json({ error: "method_not_allowed" }, 405, cors);
+  if (origin && !cors["Access-Control-Allow-Origin"]) return json({ error: "origin_not_allowed" }, 403, cors);
+  if (!c.supabaseUrl || !c.serviceKey || !c.anonKey) return json({ error: "not_configured" }, 503, cors);
+
+  const authHeader = req.headers.get("authorization") || "";
+  if (!authHeader) return json({ error: "unauthorized" }, 401, cors);
+
+  try {
+    if (!(await callerIsOwner(c, deps.fetch, authHeader))) return json({ error: "forbidden" }, 403, cors);
+    if (!c.tiktokAppId || !c.oauthStateSecret) return json({ error: "not_configured" }, 503, cors);
+
+    const nowSec = Math.floor((deps.now ? deps.now() : Date.now()) / 1000);
+    const state = await signState(c.oauthStateSecret, "tiktok_ads", nowSec);
+    const redirectUri = `${c.supabaseUrl}/functions/v1/tiktok-oauth-callback`;
+    return json({ url: tiktokAuthorizationUrl(c.tiktokAppId, redirectUri, state) }, 200, cors);
+  } catch (e) {
+    console.error("tiktok-oauth-start failed:", e instanceof Error ? e.message : e);
+    return json({ error: "server_error" }, 500, cors);
+  }
+}
+
+// Callback: TikTok's own top-level redirect after the owner approves or denies. Same shape as
+// Meta's -- no Supabase login reaches here, the signed state is what proves it is real, checked
+// before anything else runs so a forged or expired state cannot trigger so much as a failure write.
+export async function handleTiktokOAuthCallback(req: Request, deps: Deps): Promise<Response> {
+  const c = config(deps.env);
+  if (req.method !== "GET") return json({ error: "method_not_allowed" }, 405);
+  if (!c.oauthStateSecret || !c.supabaseUrl || !c.serviceKey) return json({ error: "not_configured" }, 503);
+
+  const nowSec = Math.floor((deps.now ? deps.now() : Date.now()) / 1000);
+  const u = new URL(req.url);
+  const backToConsole = (q: Record<string, string>) => {
+    const dest = new URL(`${c.adminUrl}/integrations/`);
+    for (const [k, v] of Object.entries(q)) dest.searchParams.set(k, v);
+    return new Response(null, { status: 302, headers: { Location: dest.toString() } });
+  };
+  const fail = async (reason: string) => {
+    try { await rpc(c, deps.fetch, "record_oauth_failure", { p_provider: "tiktok_ads", p_reason: reason }); }
+    catch (e) { console.error("could not record the oauth failure:", e instanceof Error ? e.message : e); }
+    return backToConsole({ oauth: "tiktok", status: "error", reason: reason.slice(0, 200) });
+  };
+
+  const state = u.searchParams.get("state");
+  const check = await verifyState(c.oauthStateSecret, "tiktok_ads", state, nowSec);
+  if (!check.ok) return backToConsole({ oauth: "tiktok", status: "error", reason: check.reason }); // state itself unproven: do not even record a failure
+
+  const tiktokError = u.searchParams.get("error") || u.searchParams.get("error_description");
+  if (tiktokError) return fail(tiktokError);
+
+  // TikTok's redirect carries both `auth_code` and a redundant `code` with the same value.
+  const authCode = u.searchParams.get("auth_code") || u.searchParams.get("code");
+  if (!authCode) return fail("no_code");
+  if (!c.tiktokAppId || !c.tiktokAppSecret) return fail("not_configured");
+
+  try {
+    const tokenRes = await deps.fetch(TIKTOK_TOKEN_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(tiktokTokenExchangeBody(c.tiktokAppId, c.tiktokAppSecret, authCode)),
+    });
+    const tokenBody: { code?: number; message?: string; data?: { access_token?: string; advertiser_ids?: unknown[]; refresh_token?: string } } =
+      await tokenRes.json().catch(() => ({}));
+    if (!tokenRes.ok || tokenBody.code !== 0 || !tokenBody.data?.access_token) {
+      return fail(tokenBody.message || "token exchange failed");
+    }
+
+    // Unlike Meta's long-lived token, TikTok's access_token expires every 24h and can only be
+    // renewed with this refresh_token -- without it the connection would go stale in a day with no
+    // way back, so that counts as a failed connection rather than a degraded-but-saved one.
+    const refreshToken = tokenBody.data.refresh_token;
+    if (!refreshToken) return fail("no refresh token in response");
+
+    const accountId = (tokenBody.data.advertiser_ids || []).map((a) => String(a)).filter(Boolean).join(",");
+
+    await rpc(c, deps.fetch, "apply_oauth_connection", {
+      p_provider: "tiktok_ads",
+      p_access_token: tokenBody.data.access_token,
+      p_account_id: accountId,
+      p_refresh_token: refreshToken,
+    });
+    return backToConsole({ oauth: "tiktok", status: "connected" });
   } catch (e) {
     return fail(e instanceof Error ? e.message : String(e));
   }

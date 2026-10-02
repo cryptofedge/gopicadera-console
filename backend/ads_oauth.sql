@@ -8,10 +8,20 @@
 -- REST -- keeps the "what can this key actually do" surface small and auditable, matching
 -- apply_stripe_event in stripe_payments.sql.
 
+-- Postgres treats a different argument count as a different, overloaded function even with a
+-- default on the new one -- it will not just extend the original. Drop the original 3-arg version
+-- first so there is only ever one `apply_oauth_connection`, never two ambiguous overloads.
+drop function if exists apply_oauth_connection(integration_provider, text, text);
+
 create or replace function apply_oauth_connection(
   p_provider integration_provider,
   p_access_token text,
-  p_account_id text
+  p_account_id text,
+  -- TikTok's access token expires every 24h and needs this to get a new one; Meta has nothing
+  -- like it (its long-lived token is used directly), so this stays null for meta_ads. There is no
+  -- dedicated column for it -- client_id is never used by any OAuth provider's own form (that
+  -- form is hidden for them), so it is repurposed here rather than adding a migration for one value.
+  p_refresh_token text default null
 ) returns void
 language plpgsql security definer set search_path = public as $$
 begin
@@ -26,6 +36,7 @@ begin
      set client_secret = p_access_token,
          -- one or more platform account ids, comma-joined; nothing presumes there is exactly one
          store_id      = nullif(trim(coalesce(p_account_id, '')), ''),
+         client_id     = nullif(trim(coalesce(p_refresh_token, '')), ''),
          status        = 'connected',
          last_error    = null,
          updated_at    = now()
@@ -37,8 +48,8 @@ begin
 end;
 $$;
 
-revoke all on function apply_oauth_connection(integration_provider, text, text) from public, anon, authenticated;
-grant execute on function apply_oauth_connection(integration_provider, text, text) to service_role;
+revoke all on function apply_oauth_connection(integration_provider, text, text, text) from public, anon, authenticated;
+grant execute on function apply_oauth_connection(integration_provider, text, text, text) to service_role;
 
 -- A failed or abandoned OAuth attempt (denied consent, Meta/TikTok error, token exchange failure)
 -- is recorded here too, so the card can show *why* without ever having written a token.
