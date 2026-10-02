@@ -1,7 +1,8 @@
-// The two request handlers, written against injected dependencies (env, fetch, clock) so they can be
-// tested end to end without Deno, a network, or a real Stripe account.
+// The request handlers, written against injected dependencies (env, fetch, clock) so they can be
+// tested end to end without Deno, a network, or a real Stripe/Meta account.
 import { buildCheckoutParams, corsHeaders, json, toFormBody, verifyStripeSignature } from "./stripe-lib.ts";
 import type { CheckoutOrder, Env } from "./stripe-lib.ts";
+import { metaAdAccountsUrl, metaAuthorizationUrl, metaCodeExchangeUrl, metaLongLivedExchangeUrl, signState, verifyState } from "./oauth-lib.ts";
 
 export interface Deps {
   env: Env;
@@ -34,6 +35,12 @@ function config(env: Env) {
     // Supabase auto-injects these three into every Edge Function; never set as a secret by hand.
     anonKey: env.SUPABASE_ANON_KEY || "",
     adminOrigins: (env.ADMIN_ORIGINS || DEFAULT_ADMIN_ORIGINS).split(",").map((s) => s.trim()).filter(Boolean),
+    adminUrl: (env.ADMIN_URL || "https://admin.gopicadera.com").replace(/\/$/, ""),
+    // Signs the short-lived OAuth "state" parameter (see oauth-lib.ts). Distinct from the Stripe
+    // webhook secret on purpose -- a leak of one must never let someone forge the other.
+    oauthStateSecret: env.OAUTH_STATE_SECRET || "",
+    metaAppId: env.META_APP_ID || "",
+    metaAppSecret: env.META_APP_SECRET || "",
   };
 }
 
@@ -220,5 +227,98 @@ export async function handleStripeStatus(req: Request, deps: Deps): Promise<Resp
   } catch (e) {
     console.error("stripe-status failed:", e instanceof Error ? e.message : e);
     return json({ error: "server_error" }, 500, cors);
+  }
+}
+
+// ------------------------------------------------------------------------ Meta ads OAuth -----
+// Start: owner-only (same callerIsOwner check as stripe-status). Returns {url} for the BROWSER to
+// navigate to itself -- a redirect issued from here would need to carry the owner's auth header,
+// which a plain top-level navigation cannot send. Same reason create-checkout returns a url
+// instead of a 302.
+export async function handleMetaOAuthStart(req: Request, deps: Deps): Promise<Response> {
+  const c = config(deps.env);
+  const origin = req.headers.get("origin") || "";
+  const cors = corsHeaders(origin, c.adminOrigins);
+  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
+  if (req.method !== "GET" && req.method !== "POST") return json({ error: "method_not_allowed" }, 405, cors);
+  if (origin && !cors["Access-Control-Allow-Origin"]) return json({ error: "origin_not_allowed" }, 403, cors);
+  if (!c.supabaseUrl || !c.serviceKey || !c.anonKey) return json({ error: "not_configured" }, 503, cors);
+
+  const authHeader = req.headers.get("authorization") || "";
+  if (!authHeader) return json({ error: "unauthorized" }, 401, cors);
+
+  try {
+    if (!(await callerIsOwner(c, deps.fetch, authHeader))) return json({ error: "forbidden" }, 403, cors);
+    if (!c.metaAppId || !c.oauthStateSecret) return json({ error: "not_configured" }, 503, cors);
+
+    const nowSec = Math.floor((deps.now ? deps.now() : Date.now()) / 1000);
+    const state = await signState(c.oauthStateSecret, "meta_ads", nowSec);
+    const redirectUri = `${c.supabaseUrl}/functions/v1/meta-oauth-callback`;
+    return json({ url: metaAuthorizationUrl(c.metaAppId, redirectUri, state) }, 200, cors);
+  } catch (e) {
+    console.error("meta-oauth-start failed:", e instanceof Error ? e.message : e);
+    return json({ error: "server_error" }, 500, cors);
+  }
+}
+
+// Callback: Meta's own top-level redirect after the owner approves or denies. No Supabase login
+// reaches here (same reason the Stripe webhook has none) -- the signed state parameter is what
+// proves this belongs to a flow an authenticated owner actually started, checked BEFORE anything
+// else runs, so a forged or expired state cannot trigger so much as a failure write.
+export async function handleMetaOAuthCallback(req: Request, deps: Deps): Promise<Response> {
+  const c = config(deps.env);
+  if (req.method !== "GET") return json({ error: "method_not_allowed" }, 405);
+  if (!c.oauthStateSecret || !c.supabaseUrl || !c.serviceKey) return json({ error: "not_configured" }, 503);
+
+  const nowSec = Math.floor((deps.now ? deps.now() : Date.now()) / 1000);
+  const u = new URL(req.url);
+  const backToConsole = (q: Record<string, string>) => {
+    const dest = new URL(`${c.adminUrl}/integrations/`);
+    for (const [k, v] of Object.entries(q)) dest.searchParams.set(k, v);
+    return new Response(null, { status: 302, headers: { Location: dest.toString() } });
+  };
+  const fail = async (reason: string) => {
+    try { await rpc(c, deps.fetch, "record_oauth_failure", { p_provider: "meta_ads", p_reason: reason }); }
+    catch (e) { console.error("could not record the oauth failure:", e instanceof Error ? e.message : e); }
+    return backToConsole({ oauth: "meta", status: "error", reason: reason.slice(0, 200) });
+  };
+
+  const state = u.searchParams.get("state");
+  const check = await verifyState(c.oauthStateSecret, "meta_ads", state, nowSec);
+  if (!check.ok) return backToConsole({ oauth: "meta", status: "error", reason: check.reason }); // state itself unproven: do not even record a failure
+
+  const metaError = u.searchParams.get("error");
+  if (metaError) return fail(u.searchParams.get("error_description") || metaError);
+
+  const code = u.searchParams.get("code");
+  if (!code) return fail("no_code");
+  if (!c.metaAppId || !c.metaAppSecret) return fail("not_configured");
+
+  try {
+    const redirectUri = `${c.supabaseUrl}/functions/v1/meta-oauth-callback`;
+    const shortRes = await deps.fetch(metaCodeExchangeUrl(c.metaAppId, c.metaAppSecret, redirectUri, code));
+    const shortBody: { access_token?: string; error?: { message?: string } } = await shortRes.json().catch(() => ({}));
+    if (!shortRes.ok || !shortBody.access_token) return fail(shortBody.error?.message || "token exchange failed");
+
+    // The long-lived exchange is a nice-to-have (weeks instead of ~2h of access); do not fail the
+    // whole connection just because it did not go through.
+    let accessToken = shortBody.access_token;
+    try {
+      const longRes = await deps.fetch(metaLongLivedExchangeUrl(c.metaAppId, c.metaAppSecret, accessToken));
+      const longBody: { access_token?: string } = await longRes.json().catch(() => ({}));
+      if (longRes.ok && longBody.access_token) accessToken = longBody.access_token;
+    } catch (e) { console.error("long-lived token exchange failed, keeping the short-lived one:", e instanceof Error ? e.message : e); }
+
+    let accountId = "";
+    try {
+      const acctRes = await deps.fetch(metaAdAccountsUrl(accessToken));
+      const acctBody: { data?: { account_id?: string }[] } = await acctRes.json().catch(() => ({}));
+      accountId = (acctBody.data || []).map((a) => a.account_id).filter((x): x is string => !!x).join(",");
+    } catch (e) { console.error("could not list ad accounts (connection still saved):", e instanceof Error ? e.message : e); }
+
+    await rpc(c, deps.fetch, "apply_oauth_connection", { p_provider: "meta_ads", p_access_token: accessToken, p_account_id: accountId });
+    return backToConsole({ oauth: "meta", status: "connected" });
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : String(e));
   }
 }
