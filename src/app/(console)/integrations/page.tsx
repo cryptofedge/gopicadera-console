@@ -4,21 +4,22 @@
  * Everything this console connects to: delivery marketplaces, the point of
  * sale, and the WhatsApp number. Owner-only.
  *
- * None of these are real click-to-connect yet — every one of them requires the
- * restaurant to be approved as a partner first (or, for Meta/TikTok, a real
- * OAuth flow this console does not implement), which then yields a store id
+ * Meta is the one provider with a real connection flow: the button below
+ * calls a Supabase Edge Function that redirects to Meta's own consent screen,
+ * and the callback stores the resulting long-lived token server-side — the
+ * owner never sees or pastes a key. Everything else still requires the
+ * restaurant to be approved as a partner first (or, for TikTok, a redirect
+ * flow this console does not implement yet), which then yields a store id
  * and a key pair to paste. `oauth: true` on a card is reserved for a provider
- * this console can actually drive through a real OAuth redirect; until one is
- * built, a card says what it actually needs rather than promising a button
- * that cannot work yet. (That promise used to be made for Square, Clover,
- * Meta and TikTok; it never matched what the code did, and that is the bug
- * this comment is here to stop from coming back.)
+ * actually wired through a redirect like that; it used to be claimed for
+ * Square, Clover, Meta and TikTok before any of them had one, and that
+ * mismatch is the bug this comment is here to stop from coming back.
  *
  * Secrets are write-only from here: once saved, the field shows that a key
  * exists and never its value. Staff cannot open this page at all, and RLS
  * refuses them the table even if they craft the request by hand.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { browserClient } from "@/lib/supabase-browser";
 import { useQuery } from "@/lib/useQuery";
 
@@ -44,11 +45,12 @@ type Row = {
 
 /**
  * `oauth: true` means the provider genuinely supports click-to-connect and the
- * owner never handles a key. As of now that is none of them: every provider
- * below needs approval, a real OAuth integration this console does not have
- * yet, or both — so the card says so instead of pretending otherwise.
+ * owner never handles a key. Right now that is Meta alone, through the
+ * Edge Functions named by `startFn`. Everyone else below needs approval, a
+ * real redirect-based connection this console does not have yet, or both —
+ * so the card says so instead of pretending otherwise.
  */
-const META: Record<Provider, { name: string; blurb: string; portal: string; color: string; oauth?: boolean }> = {
+const META: Record<Provider, { name: string; blurb: string; portal: string; color: string; oauth?: boolean; startFn?: string }> = {
   ubereats: {
     name: "Uber Eats",
     blurb: "Pide acceso de API en Uber Eats Manager. Ellos aprueban y te dan las llaves.",
@@ -101,9 +103,11 @@ const META: Record<Provider, { name: string; blurb: string; portal: string; colo
 
   meta_ads: {
     name: "Meta",
-    blurb: "Facebook e Instagram. La conexión directa con Meta Business todavía no está lista en esta consola.",
+    blurb: "Facebook e Instagram. Conecta tu propia cuenta de Meta Business con un botón — nunca copias una llave.",
     portal: "business.facebook.com",
     color: "#0866FF",
+    oauth: true,
+    startFn: "meta-oauth-start",
   },
   google_ads: {
     name: "Google Ads",
@@ -278,6 +282,43 @@ export default function IntegrationsPage() {
   const [open, setOpen] = useState<Provider | null>(null);
   const [busy, setBusy] = useState(false);
   const [saveError, setSaveError] = useState("");
+  const [connecting, setConnecting] = useState<Provider | null>(null);
+  const [banner, setBanner] = useState<{ ok: boolean; text: string } | null>(null);
+
+  // Meta's own redirect lands back here with ?oauth=meta&status=connected|error[&reason=...].
+  // Read it once, show it, then strip it from the URL so a refresh does not repeat the toast.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const provider = params.get("oauth");
+    if (!provider) return;
+    const status = params.get("status");
+    const reason = params.get("reason");
+    const name = provider === "meta" ? "Meta" : provider;
+    setBanner(
+      status === "connected"
+        ? { ok: true, text: `${name} quedó conectado.` }
+        : { ok: false, text: `${name} no se pudo conectar${reason ? `: ${reason}` : ""}.` },
+    );
+    params.delete("oauth");
+    params.delete("status");
+    params.delete("reason");
+    const qs = params.toString();
+    window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : ""));
+  }, []);
+
+  async function connectVia(provider: Provider) {
+    const fn = META[provider].startFn;
+    if (!fn) return;
+    setConnecting(provider);
+    setSaveError("");
+    const { data, error: err } = await browserClient().functions.invoke(fn);
+    if (err || !data?.url) {
+      setConnecting(null);
+      setSaveError(err?.message || "No se pudo iniciar la conexión.");
+      return;
+    }
+    window.location.href = data.url;
+  }
 
   async function save(provider: Provider, fd: FormData) {
     setBusy(true);
@@ -349,6 +390,17 @@ export default function IntegrationsPage() {
         Todo lo que la consola conecta con el mundo de afuera.
       </p>
 
+      {banner && (
+        <div className="rounded-xl border p-3 mb-4 max-w-md text-xs font-bold"
+             style={{
+               background: "var(--surface)",
+               borderColor: banner.ok ? "var(--green)" : "var(--red)",
+               color: banner.ok ? "var(--green)" : "var(--red)",
+             }}>
+          {banner.text}
+        </div>
+      )}
+
       <StripeStatusCard />
 
 {SECTIONS.map((sec) => {
@@ -400,15 +452,24 @@ export default function IntegrationsPage() {
               )}
 
               <div className="flex gap-2">
-                <button
-                  onClick={() => setOpen(open === r.provider ? null : r.provider)}
-                  className="px-3 py-1.5 rounded-full text-xs font-bold"
-                  style={{ background: "var(--yellow)", color: "#0A0B0E" }}
-                >
-                  {r.status === "disconnected"
-                    ? m.oauth ? `Conectar con ${m.name}` : "Conectar"
-                    : "Editar"}
-                </button>
+                {(!m.startFn || r.status !== "connected") && (
+                  <button
+                    onClick={() =>
+                      m.startFn
+                        ? connectVia(r.provider)
+                        : setOpen(open === r.provider ? null : r.provider)
+                    }
+                    disabled={connecting === r.provider}
+                    className="px-3 py-1.5 rounded-full text-xs font-bold disabled:opacity-50"
+                    style={{ background: "var(--yellow)", color: "#0A0B0E" }}
+                  >
+                    {connecting === r.provider
+                      ? "Conectando…"
+                      : m.startFn
+                        ? r.status === "disconnected" ? `Conectar con ${m.name}` : "Reintentar conexión"
+                        : r.status === "disconnected" ? "Conectar" : "Editar"}
+                  </button>
+                )}
                 {r.status !== "disconnected" && (
                   <button
                     onClick={() => disconnect(r.provider)}
@@ -421,16 +482,14 @@ export default function IntegrationsPage() {
                 )}
               </div>
 
-              {open === r.provider && (
+              {open === r.provider && !m.startFn && (
                 <form
                   action={(fd) => save(r.provider, fd)}
                   className="mt-4 pt-4 border-t grid gap-2.5"
                   style={{ borderColor: "var(--line)" }}
                 >
                   <p className="text-xs" style={{ color: "var(--faint)" }}>
-                    {m.oauth
-                      ? `Al guardar te mandamos a ${m.portal} para que autorices la conexión con tu propia cuenta. No hace falta copiar llaves.`
-                      : `Estos datos salen del portal de ${m.portal}.`}
+                    Estos datos salen del portal de {m.portal}.
                   </p>
                   <input name="store_id" defaultValue={r.store_id ?? ""}
                          placeholder="ID de tienda"
