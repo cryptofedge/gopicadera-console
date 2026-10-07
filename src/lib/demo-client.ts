@@ -293,7 +293,7 @@ export function demoClient() {
             error: null,
           };
         }
-        if (name === "meta-oauth-start" || name === "tiktok-oauth-start") {
+        if (name === "meta-oauth-start" || name === "tiktok-oauth-start" || name === "google-ads-oauth-start") {
           // Same as production until that platform's developer app and secrets exist: a 503 not_configured,
           // delivered the way supabase-js delivers any non-2xx (a generic message plus the Response in `context`).
           return {
