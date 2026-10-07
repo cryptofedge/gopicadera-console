@@ -307,15 +307,32 @@ export default function IntegrationsPage() {
     window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : ""));
   }, []);
 
+  // supabase-js turns any non-2xx into a generic "returned a non-2xx status code"; the real reason is in
+  // the response body, so read it and say something the owner can act on.
+  async function explainStartError(err: unknown, name: string): Promise<string> {
+    const res = (err as { context?: Response } | null)?.context;
+    if (res && typeof res.json === "function") {
+      try {
+        const body = await res.json();
+        if (body?.error === "not_configured") {
+          return `La conexión con ${name} todavía no está lista: falta un paso del lado técnico. Avísale a Fellito.`;
+        }
+        if (body?.error === "forbidden") return "Solo una cuenta de dueño puede conectar esto.";
+      } catch { /* fall through to the generic message */ }
+    }
+    return `No se pudo iniciar la conexión con ${name}. Intenta de nuevo en un momento.`;
+  }
+
   async function connectVia(provider: Provider) {
     const fn = META[provider].startFn;
     if (!fn) return;
     setConnecting(provider);
-    setSaveError("");
+    setBanner(null);
     const { data, error: err } = await browserClient().functions.invoke(fn);
     if (err || !data?.url) {
       setConnecting(null);
-      setSaveError(err?.message || "No se pudo iniciar la conexión.");
+      // The banner, not saveError: saveError only renders inside the manual-key form, which these cards do not have.
+      setBanner({ ok: false, text: await explainStartError(err, META[provider].name) });
       return;
     }
     window.location.href = data.url;
