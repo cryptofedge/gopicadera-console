@@ -6,6 +6,7 @@ import {
   metaAdAccountsUrl, metaAuthorizationUrl, metaCodeExchangeUrl, metaLongLivedExchangeUrl,
   signState, verifyState,
   tiktokAuthorizationUrl, tiktokTokenExchangeBody, TIKTOK_TOKEN_URL,
+  googleAuthorizationUrl, googleTokenExchangeBody, GOOGLE_TOKEN_URL, GOOGLE_ACCESSIBLE_CUSTOMERS_URL,
 } from "./oauth-lib.ts";
 
 export interface Deps {
@@ -47,6 +48,11 @@ function config(env: Env) {
     metaAppSecret: env.META_APP_SECRET || "",
     tiktokAppId: env.TIKTOK_APP_ID || "",
     tiktokAppSecret: env.TIKTOK_APP_SECRET || "",
+    googleClientId: env.GOOGLE_ADS_CLIENT_ID || "",
+    googleClientSecret: env.GOOGLE_ADS_CLIENT_SECRET || "",
+    // Optional. Google moved access levels onto the Cloud project in September 2026 and its docs do not say
+    // whether this header is still read, so it is sent only when set and nothing depends on it being there.
+    googleDeveloperToken: env.GOOGLE_ADS_DEVELOPER_TOKEN || "",
   };
 }
 
@@ -415,6 +421,103 @@ export async function handleTiktokOAuthCallback(req: Request, deps: Deps): Promi
       p_refresh_token: refreshToken,
     });
     return backToConsole({ oauth: "tiktok", status: "connected" });
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : String(e));
+  }
+}
+
+export async function handleGoogleAdsOAuthStart(req: Request, deps: Deps): Promise<Response> {
+  const c = config(deps.env);
+  const origin = req.headers.get("origin") || "";
+  const cors = corsHeaders(origin, c.adminOrigins);
+  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
+  if (req.method !== "GET" && req.method !== "POST") return json({ error: "method_not_allowed" }, 405, cors);
+  if (origin && !cors["Access-Control-Allow-Origin"]) return json({ error: "origin_not_allowed" }, 403, cors);
+  if (!c.supabaseUrl || !c.serviceKey || !c.anonKey) return json({ error: "not_configured" }, 503, cors);
+
+  const authHeader = req.headers.get("authorization") || "";
+  if (!authHeader) return json({ error: "unauthorized" }, 401, cors);
+
+  try {
+    if (!(await callerIsOwner(c, deps.fetch, authHeader))) return json({ error: "forbidden" }, 403, cors);
+    if (!c.googleClientId || !c.oauthStateSecret) return json({ error: "not_configured" }, 503, cors);
+
+    const nowSec = Math.floor((deps.now ? deps.now() : Date.now()) / 1000);
+    const state = await signState(c.oauthStateSecret, "google_ads", nowSec);
+    const redirectUri = `${c.supabaseUrl}/functions/v1/google-ads-oauth-callback`;
+    return json({ url: googleAuthorizationUrl(c.googleClientId, redirectUri, state) }, 200, cors);
+  } catch (e) {
+    console.error("google-ads-oauth-start failed:", e instanceof Error ? e.message : e);
+    return json({ error: "server_error" }, 500, cors);
+  }
+}
+
+// Callback: Google's own top-level redirect after the owner approves or denies. Same guarantees as Meta's
+// and TikTok's -- no Supabase login reaches here, the signed state is what proves it is real, checked
+// before anything else runs so a forged or expired state cannot trigger so much as a failure write.
+export async function handleGoogleAdsOAuthCallback(req: Request, deps: Deps): Promise<Response> {
+  const c = config(deps.env);
+  if (req.method !== "GET") return json({ error: "method_not_allowed" }, 405);
+  if (!c.oauthStateSecret || !c.supabaseUrl || !c.serviceKey) return json({ error: "not_configured" }, 503);
+
+  const nowSec = Math.floor((deps.now ? deps.now() : Date.now()) / 1000);
+  const u = new URL(req.url);
+  const backToConsole = (q: Record<string, string>) => {
+    const dest = new URL(`${c.adminUrl}/integrations/`);
+    for (const [k, v] of Object.entries(q)) dest.searchParams.set(k, v);
+    return new Response(null, { status: 302, headers: { Location: dest.toString() } });
+  };
+  const fail = async (reason: string) => {
+    try { await rpc(c, deps.fetch, "record_oauth_failure", { p_provider: "google_ads", p_reason: reason }); }
+    catch (e) { console.error("could not record the oauth failure:", e instanceof Error ? e.message : e); }
+    return backToConsole({ oauth: "google", status: "error", reason: reason.slice(0, 200) });
+  };
+
+  const state = u.searchParams.get("state");
+  const check = await verifyState(c.oauthStateSecret, "google_ads", state, nowSec);
+  if (!check.ok) return backToConsole({ oauth: "google", status: "error", reason: check.reason }); // state itself unproven: do not even record a failure
+
+  const googleError = u.searchParams.get("error");
+  if (googleError) return fail(u.searchParams.get("error_description") || googleError);
+
+  const code = u.searchParams.get("code");
+  if (!code) return fail("no_code");
+  if (!c.googleClientId || !c.googleClientSecret) return fail("not_configured");
+
+  try {
+    const redirectUri = `${c.supabaseUrl}/functions/v1/google-ads-oauth-callback`;
+    const tokenRes = await deps.fetch(GOOGLE_TOKEN_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: googleTokenExchangeBody(c.googleClientId, c.googleClientSecret, redirectUri, code),
+    });
+    const tokenBody: { access_token?: string; refresh_token?: string; error?: string; error_description?: string } =
+      await tokenRes.json().catch(() => ({}));
+    if (!tokenRes.ok || !tokenBody.access_token) {
+      return fail(tokenBody.error_description || tokenBody.error || "token exchange failed");
+    }
+
+    // The refresh token is the only durable credential (the access token lasts an hour and is never stored),
+    // so a response without one is a failed connection, not a degraded one -- it would be dead by the next hour.
+    const refreshToken = tokenBody.refresh_token;
+    if (!refreshToken) return fail("Google no entrego el permiso de renovacion. Quita esta app en myaccount.google.com/permissions y vuelve a conectar.");
+
+    // Best-effort, like Meta's ad-account lookup: a missing or unapproved access level makes this call fail
+    // for reasons the owner cannot fix from here, and that must not undo a perfectly good connection.
+    let accountId = "";
+    try {
+      const headers: Record<string, string> = { Authorization: `Bearer ${tokenBody.access_token}` };
+      if (c.googleDeveloperToken) headers["developer-token"] = c.googleDeveloperToken;
+      const acctRes = await deps.fetch(GOOGLE_ACCESSIBLE_CUSTOMERS_URL, { headers });
+      const acctBody: { resourceNames?: string[] } = await acctRes.json().catch(() => ({}));
+      if (acctRes.ok) {
+        accountId = (acctBody.resourceNames || []).map((r) => String(r).replace(/^customers\//, "")).filter(Boolean).join(",");
+      }
+    } catch (e) { console.error("could not list Google Ads accounts (connection still saved):", e instanceof Error ? e.message : e); }
+
+    // p_access_token is the column's name for "the credential to keep"; for Google that is the refresh token.
+    await rpc(c, deps.fetch, "apply_oauth_connection", { p_provider: "google_ads", p_access_token: refreshToken, p_account_id: accountId });
+    return backToConsole({ oauth: "google", status: "connected" });
   } catch (e) {
     return fail(e instanceof Error ? e.message : String(e));
   }

@@ -1,6 +1,10 @@
--- Real OAuth connections for the ad platforms (Meta, TikTok), applied by the oauth-callback Edge
--- Functions after a successful token exchange. Safe to run more than once. Not part of APPLY_ALL.sql,
--- same reason as stripe_payments.sql: this is new surface, applied deliberately.
+-- Real OAuth connections for the ad platforms (Meta, TikTok, Google Ads), applied by the oauth-callback
+-- Edge Functions after a successful token exchange. Safe to run more than once. Not part of
+-- APPLY_ALL.sql, same reason as stripe_payments.sql: this is new surface, applied deliberately.
+--
+-- What `p_access_token` carries differs per platform, because it always lands in client_secret: Meta's
+-- long-lived token and TikTok's access token are used directly; for google_ads it is the REFRESH token,
+-- since Google's access token lasts only an hour and is minted from the refresh token whenever needed.
 --
 -- Why a function and not a plain update from the Edge Function: the callback runs with the service
 -- role key and no owner session (Meta/TikTok's redirect carries no Supabase login), so writing
@@ -25,7 +29,7 @@ create or replace function apply_oauth_connection(
 ) returns void
 language plpgsql security definer set search_path = public as $$
 begin
-  if p_provider not in ('meta_ads', 'tiktok_ads') then
+  if p_provider not in ('meta_ads', 'tiktok_ads', 'google_ads') then
     raise exception 'apply_oauth_connection: % does not use the OAuth path', p_provider;
   end if;
   if p_access_token is null or length(trim(p_access_token)) = 0 then
@@ -59,7 +63,7 @@ create or replace function record_oauth_failure(
 ) returns void
 language plpgsql security definer set search_path = public as $$
 begin
-  if p_provider not in ('meta_ads', 'tiktok_ads') then
+  if p_provider not in ('meta_ads', 'tiktok_ads', 'google_ads') then
     raise exception 'record_oauth_failure: % does not use the OAuth path', p_provider;
   end if;
   update integrations

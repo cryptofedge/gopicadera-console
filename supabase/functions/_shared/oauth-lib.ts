@@ -98,3 +98,36 @@ export function tiktokAuthorizationUrl(appId: string, redirectUri: string, state
 export function tiktokTokenExchangeBody(appId: string, appSecret: string, authCode: string): Record<string, string> {
   return { app_id: appId, secret: appSecret, auth_code: authCode };
 }
+
+// ---------------------------------------------------------- Google Ads ----
+// The Ads API is versioned in the URL and Google retires old versions on a schedule, so this is pinned
+// on purpose (v25 was current in October 2026; minor releases such as 25.1 are additive under it).
+export const GOOGLE_ADS_API_VERSION = "v25";
+export const GOOGLE_ADS_SCOPE = "https://www.googleapis.com/auth/adwords";
+export const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
+export const GOOGLE_ACCESSIBLE_CUSTOMERS_URL = `https://googleads.googleapis.com/${GOOGLE_ADS_API_VERSION}/customers:listAccessibleCustomers`;
+
+export function googleAuthorizationUrl(clientId: string, redirectUri: string, state: string): string {
+  const u = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+  u.searchParams.set("client_id", clientId);
+  u.searchParams.set("redirect_uri", redirectUri);
+  u.searchParams.set("response_type", "code");
+  u.searchParams.set("scope", GOOGLE_ADS_SCOPE);
+  // Both are needed to be handed a refresh token: Google omits it on a repeat consent unless it is forced,
+  // and the refresh token is the only durable credential (the access token lasts one hour).
+  u.searchParams.set("access_type", "offline");
+  u.searchParams.set("prompt", "consent");
+  u.searchParams.set("state", state);
+  return u.toString();
+}
+
+// Google's token endpoint wants a form-encoded POST (Meta used a query string, TikTok used JSON).
+export function googleTokenExchangeBody(clientId: string, clientSecret: string, redirectUri: string, code: string): string {
+  return new URLSearchParams({
+    grant_type: "authorization_code",
+    code,
+    client_id: clientId,
+    client_secret: clientSecret,
+    redirect_uri: redirectUri,
+  }).toString();
+}

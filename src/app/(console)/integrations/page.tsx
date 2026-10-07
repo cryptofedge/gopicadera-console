@@ -4,7 +4,7 @@
  * Everything this console connects to: delivery marketplaces, the point of
  * sale, and the WhatsApp number. Owner-only.
  *
- * Meta and TikTok are the providers with a real connection flow: the button
+ * Meta, TikTok and Google Ads are the providers with a real connection flow: the button
  * below calls a Supabase Edge Function that redirects to the platform's own
  * consent screen, and the callback stores the resulting token server-side —
  * the owner never sees or pastes a key. Everything else still requires the
@@ -44,7 +44,7 @@ type Row = {
 
 /**
  * `oauth: true` means the provider genuinely supports click-to-connect and the
- * owner never handles a key. Right now that is Meta and TikTok, through the
+ * owner never handles a key. Right now that is Meta, TikTok and Google Ads, through the
  * Edge Functions named by `startFn`. Everyone else below needs approval, a
  * real redirect-based connection this console does not have yet, or both —
  * so the card says so instead of pretending otherwise.
@@ -110,9 +110,11 @@ const META: Record<Provider, { name: string; blurb: string; portal: string; colo
   },
   google_ads: {
     name: "Google Ads",
-    blurb: "Google exige un token de desarrollador aprobado antes de dar acceso.",
+    blurb: "Conecta tu propia cuenta de Google Ads con un botón — nunca copias una llave.",
     portal: "ads.google.com",
     color: "#4285F4",
+    oauth: true,
+    startFn: "google-ads-oauth-start",
   },
   tiktok_ads: {
     name: "TikTok",
@@ -294,7 +296,7 @@ export default function IntegrationsPage() {
     if (!provider) return;
     const status = params.get("status");
     const reason = params.get("reason");
-    const name = provider === "meta" ? "Meta" : provider === "tiktok" ? "TikTok" : provider;
+    const name = provider === "meta" ? "Meta" : provider === "tiktok" ? "TikTok" : provider === "google" ? "Google Ads" : provider;
     setBanner(
       status === "connected"
         ? { ok: true, text: `${name} quedó conectado.` }
