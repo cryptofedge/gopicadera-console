@@ -118,7 +118,9 @@ export function buildCheckoutParams(o: CheckoutOrder, siteUrl: string, nowSec: n
 }
 
 export function corsHeaders(origin: string, allowed: string[]): Record<string, string> {
-  const h: Record<string, string> = { "Access-Control-Allow-Methods": "POST, OPTIONS", "Access-Control-Allow-Headers": "content-type, apikey, authorization", "Vary": "Origin" };
+  // x-client-info must be listed: supabase-js adds it to every functions.invoke call, and a browser blocks
+  // the whole request at the preflight if any header it wants to send is missing from this list.
+  const h: Record<string, string> = { "Access-Control-Allow-Methods": "POST, OPTIONS", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type", "Vary": "Origin" };
   if (origin && allowed.includes(origin)) h["Access-Control-Allow-Origin"] = origin;
   return h;
 }

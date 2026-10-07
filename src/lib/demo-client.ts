@@ -293,6 +293,17 @@ export function demoClient() {
             error: null,
           };
         }
+        if (name === "meta-oauth-start" || name === "tiktok-oauth-start") {
+          // Same as production until that platform's developer app and secrets exist: a 503 not_configured,
+          // delivered the way supabase-js delivers any non-2xx (a generic message plus the Response in `context`).
+          return {
+            data: null,
+            error: {
+              message: "Edge Function returned a non-2xx status code",
+              context: new Response(JSON.stringify({ error: "not_configured" }), { status: 503, headers: { "content-type": "application/json" } }),
+            },
+          };
+        }
         return { data: null, error: { message: `demo: no function stub for "${name}"` } };
       },
     },
