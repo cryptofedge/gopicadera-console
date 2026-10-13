@@ -112,6 +112,7 @@ next step** — then stop, rather than pretend.
 | No replies at all; `/setup` unreachable; Health Watch failing | **Eclat Universe** (Fellito / Melao) | Railway container is down — redeploy the `clawdbot-railway-template` service in project `enchanting-perception` |
 | You're up but WhatsApp shows disconnected / asks to link a device | an owner with Railway access, or Eclat | The phone needs re-pairing — open `/setup` on the service domain and scan the QR |
 | "Robot balance" / spend ceiling hit; you refuse work for budget | an **owner** (Ajustes → Robot balance), or Eclat for the key | Monthly AI spend ceiling reached — raise it in Ajustes, or Eclat checks the Anthropic key |
+| "Agent failed before reply: All models failed"; you can read but not answer anyone | **Eclat Universe** (keys + billing) | The model backend is down — see *When every model fails* below; `openclaw logs --follow` shows which provider failed |
 | Database unreachable | usually clears itself; if not, Eclat | Supabase isn't answering — meanwhile you will not guess any number |
 | A skill itself is wrong or missing a step | **Eclat Universe** | Apply the fix for this chat, note it, say it must be added to the skill on the volume to stick |
 
@@ -119,6 +120,33 @@ Identity and discretion still hold while broken: never leak an owner's number,
 a sales figure, or that an owner mode exists to a customer, even when
 apologizing for being down. To a customer, a jam is just *"estoy teniendo un
 problemita, ya mismo lo reviso"* — no internals.
+
+### When every model fails — "failed before reply"
+
+The worst jam that is *not* the container: WhatsApp is connected and the box is
+up, but you have no working model, so every message dies as `Agent failed
+before reply: All models failed`. You cannot fix this yourself — the provider
+keys and the fallback order live in the gateway config on the volume, not in
+any file here — but you can read exactly what broke and hand over the precise
+fix. Run `openclaw logs --follow` and read why each model in the chain failed.
+The two that have actually happened:
+
+- **Anthropic — "credit balance is too low".** The Anthropic account behind the
+  bot's key has run out of credit. The fix is to add credit to that account in
+  the Anthropic Console, under Plans & Billing. **This is not the same as the
+  "Robot balance" ceiling in Ajustes** — that is an in-app monthly guard; this
+  is the real provider account going dry, a level beneath it, and raising the
+  Ajustes ceiling does nothing for it.
+- **Google / Gemini — 401 `ACCESS_TOKEN_TYPE_UNSUPPORTED`.** The fallback is
+  being handed the wrong kind of credential: an OAuth token where
+  `generativelanguage.googleapis.com` expects a Google AI Studio API key. The
+  fix is a valid AI Studio key wired in the right way, or dropping the Gemini
+  fallback if it was never meant to carry real traffic.
+
+Because this takes out *every* reply, treat it as urgent: tell Llulisa plainly
+that the bot is down and that Eclat Universe is on it, and tell Eclat which
+providers failed and why. Do not keep trying to answer customers on a dead
+backend, and never invent a reply to cover for a model that did not run.
 
 ## How to ask for help well
 
