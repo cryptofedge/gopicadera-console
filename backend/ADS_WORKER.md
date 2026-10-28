@@ -14,9 +14,32 @@ Promoción page asks for and keeps it up to date:
   - Google: a revoked permission marks the connection "Con problema".
   - Neither is ever retried silently.
 
-Creating ads from the console (the `launch` job) comes in the next part. Until then the worker answers a launch
-with a message telling the owner to create the campaign in the platform's own ad manager, where it will be
-picked up automatically.
+- **Creates ads.** "Publicar" on a draft queues a `launch`. The worker first checks everything the owner can fix
+  (budget minimums, an image or video, Google's text lengths, the TikTok zones), before a single call goes to the
+  platform. It then builds the ad, as described in the next section.
+
+## How a launch is built
+
+The campaign is created **switched off**, its pieces switched on beneath it, and the campaign is switched on as
+the very last step. Nothing can spend unless every step succeeded, and a failure removes whatever was already
+made.
+
+| Platform | What it makes, in order | Needs |
+|---|---|---|
+| **Meta** (Facebook + Instagram) | 1. image upload<br>2. creative naming the Page and its Instagram account<br>3. `OUTCOME_TRAFFIC` campaign, paused<br>4. ad set: daily budget, radius around the restaurant, link clicks<br>5. ad<br>6. campaign on | an image; a Page (and for Instagram, the Page's linked Instagram account), recorded when Meta was connected |
+| **TikTok** | 1. checks a real TikTok account is linked (since Jan 2026 no Custom Identity)<br>2. video by URL<br>3. its cover image<br>4. `TRAFFIC` campaign, disabled<br>5. ad group: daily budget of at least $20, TikTok zones<br>6. ad<br>7. campaign on | a video; the business's TikTok account linked in Business Center; TikTok zone ids in Ajustes |
+| **Google** | one all-or-nothing request: budget, Search campaign (paused, Maximize Clicks), radius, ad group, phrase-match keywords, responsive search ad. Dry-run with `validateOnly` first, then for real, then switched on. | 3–15 headlines of ≤30 characters, 2–4 descriptions of ≤90, keywords; a developer token at Explorer level or higher; billing set up in Google Ads |
+
+Rollback differs per platform:
+- **Meta:** deletes the ad, ad set, campaign, creative and image, newest first.
+- **TikTok:** deletes the campaign, which takes its ad group and ad with it.
+- **Google:** creation is atomic, so a refused batch leaves nothing behind. If switching on fails afterwards, the
+  worker removes the campaign.
+
+Targeting comes from **Ajustes → Anuncios** (setting `ads_targeting`): the restaurant's coordinates, a default
+radius of 3 mi, and the destination URL. The coordinates default to 4820 4th Ave as OpenStreetMap geocodes it. The
+TikTok zones are filled in once from TikTok Ads Manager. Images and videos are uploaded to the public `ads`
+Storage bucket, where only an owner may write (`backend/ads_create.sql`).
 
 ## How it is woken
 
@@ -52,7 +75,8 @@ never queue another job.
 
 All commands use project `kfuamhhfthfmavxppagb`.
 
-1. **SQL:** run `backend/ads_sync.sql` in the SQL editor, after `ads_oauth.sql` and `security_hardening.sql`.
+1. **SQL:** run `backend/ads_sync.sql`, then `backend/ads_create.sql`, in the SQL editor, after `ads_oauth.sql`
+   and `security_hardening.sql`.
 2. **Secrets** (Dashboard → Edge Functions → Secrets):
    - `ADS_WORKER_SECRET`: a fresh random value (`openssl rand -hex 32`).
    - `GOOGLE_ADS_DEVELOPER_TOKEN`: required for anything on Google beyond connecting. See GOOGLE_ADS.md.
@@ -84,6 +108,8 @@ All commands use project `kfuamhhfthfmavxppagb`.
 ## Tests
 
 - `npm run test:functions`: every adapter call and the worker end to end, against a fake Meta, TikTok, Google
-  and Supabase.
+  and Supabase. This covers each launch sequence, each rollback, and the validation that runs before any call.
+- **The first real launch on each platform** is the one thing tests cannot cover. Do it on purpose: a small
+  budget, check every piece in that platform's own manager, then end it from the console.
 - `npm run test:sql`: claiming, retry and give-up, no self-feeding, imports that update instead of
   duplicating, and that the browser cannot call any worker function.

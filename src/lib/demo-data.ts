@@ -135,6 +135,8 @@ export const seed = {
       { open: 11, close: 25 },
     ] },
     { key: "whatsapp", value: "17185551234" },
+    // Same default as backend/ads_create.sql.
+    { key: "ads_targeting", value: { lat: 40.6473819, lng: -74.0121613, radius_mi: 3, destination_url: "https://gopicadera.com", tiktok_location_ids: [] } },
   ],
 
   integrations: [

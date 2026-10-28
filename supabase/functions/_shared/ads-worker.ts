@@ -1,4 +1,4 @@
-// The ads worker: drains campaign_jobs (pause / resume / end / sync, and later launch) and keeps every
+// The ads worker: drains campaign_jobs (launch / pause / resume / end / sync) and keeps every
 // connected ad account's campaigns and lifetime numbers in the campaigns table.
 //
 // Woken by ads_schedule.sql -- right after a job is queued, and every 15 minutes -- or by hand:
@@ -7,19 +7,20 @@
 import { json, safeEqual } from "./stripe-lib.ts";
 import type { Env } from "./stripe-lib.ts";
 import { rpc } from "./handlers.ts";
-import { AdsError } from "./ads-lib.ts";
-import type { CampaignStatus, PlatformCampaign, Provider, StatusAction } from "./ads-lib.ts";
+import { AdsError, validateLaunch } from "./ads-lib.ts";
+import type { CampaignStatus, LaunchSpec, PlatformCampaign, Provider, StatusAction } from "./ads-lib.ts";
 import {
-  metaListCampaigns, metaSetStatus,
-  tiktokListCampaigns, tiktokSetStatus,
-  googleMintAccessToken, googleListCampaigns, googleSetStatus,
+  metaListCampaigns, metaSetStatus, metaLaunch,
+  tiktokListCampaigns, tiktokSetStatus, tiktokLaunch,
+  googleMintAccessToken, googleListCampaigns, googleSetStatus, googleLaunch,
 } from "./ads-platforms.ts";
-import type { GoogleAuth } from "./ads-platforms.ts";
+import type { GoogleAuth, LaunchResult, Sleep } from "./ads-platforms.ts";
 
 export interface WorkerDeps {
   env: Env;
   fetch: typeof fetch;
   now?: () => number; // milliseconds
+  sleep?: Sleep;      // tests pass a no-op; TikTok's video processing is polled with it
 }
 
 const NAMES: Record<Provider, string> = { meta_ads: "Meta", tiktok_ads: "TikTok", google_ads: "Google Ads" };
@@ -39,17 +40,22 @@ function workerConfig(env: Env) {
 }
 type Config = ReturnType<typeof workerConfig>;
 
+interface ConnectionDetails {
+  token_expires_at?: string | null;
+  pages?: { id: string; name: string | null; instagram: { id: string } | null }[];
+}
+
 interface IntegrationRow {
   provider: Provider;
   status: string;
   client_secret: string | null;
   store_id: string | null;
-  details: { token_expires_at?: string | null } | null;
+  details: ConnectionDetails | null;
 }
 
 /** A connection ready to use, or the reason it is not. */
 type Connection =
-  | { ok: true; provider: Provider; accounts: string[]; token: string; google?: GoogleAuth; warning: string | null }
+  | { ok: true; provider: Provider; accounts: string[]; token: string; google?: GoogleAuth; warning: string | null; details: ConnectionDetails }
   | { ok: false; provider: Provider; reason: string };
 
 export interface CampaignRow {
@@ -60,6 +66,55 @@ export interface CampaignRow {
   external_id: string | null;
   account_id: string | null;
   platform_ids: Record<string, string> | null;
+  headline?: string | null;
+  body?: string | null;
+  daily_budget?: number | string | null;
+  starts_at?: string | null;
+  ends_at?: string | null;
+  destination_url?: string | null;
+  media_url?: string | null;
+  radius_mi?: number | string | null;
+  google_assets?: { headlines?: string[]; descriptions?: string[]; keywords?: string[] } | null;
+}
+
+/** The ads_targeting setting, edited in Ajustes. */
+interface Targeting {
+  lat?: number;
+  lng?: number;
+  radius_mi?: number;
+  destination_url?: string;
+  tiktok_location_ids?: (string | number)[];
+}
+
+async function loadTargeting(c: Config, fetchFn: typeof fetch): Promise<Targeting> {
+  const r = await fetchFn(`${c.supabaseUrl}/rest/v1/settings?key=eq.ads_targeting&select=value`, {
+    headers: { apikey: c.serviceKey, Authorization: `Bearer ${c.serviceKey}` },
+  });
+  if (!r.ok) return {};
+  const rows = await r.json().catch(() => []) as { value?: Targeting }[];
+  return rows[0]?.value || {};
+}
+
+export function launchSpec(camp: CampaignRow, t: Targeting): LaunchSpec {
+  return {
+    name: camp.name || "",
+    headline: camp.headline || "",
+    body: camp.body || "",
+    dailyBudget: Number(camp.daily_budget || 0),
+    startsAt: camp.starts_at || null,
+    endsAt: camp.ends_at || null,
+    url: camp.destination_url || t.destination_url || "https://gopicadera.com",
+    mediaUrl: camp.media_url || null,
+    lat: Number(t.lat),
+    lng: Number(t.lng),
+    radiusMi: Number(camp.radius_mi || t.radius_mi || 3),
+    google: {
+      headlines: camp.google_assets?.headlines || [],
+      descriptions: camp.google_assets?.descriptions || [],
+      keywords: camp.google_assets?.keywords || [],
+    },
+    tiktokLocationIds: (t.tiktok_location_ids || []).map(String),
+  };
 }
 
 interface Job { job_id: string; action: "launch" | "pause" | "resume" | "end" | "sync"; attempts: number; campaign: CampaignRow }
@@ -94,7 +149,7 @@ async function prepare(c: Config, fetchFn: typeof fetch, row: IntegrationRow, no
       // For Google the stored credential is the refresh token.
       const accessToken = await googleMintAccessToken(fetchFn, c.googleClientId, c.googleClientSecret, row.client_secret);
       const google = { accessToken, developerToken: c.googleDeveloperToken, loginCustomerId: c.googleLoginCustomerId };
-      return { ok: true, provider, accounts, token: accessToken, google, warning: null };
+      return { ok: true, provider, accounts, token: accessToken, google, warning: null, details: row.details || {} };
     }
 
     let warning: string | null = null;
@@ -108,7 +163,7 @@ async function prepare(c: Config, fetchFn: typeof fetch, row: IntegrationRow, no
       }
       if (left < META_WARN_DAYS * 86400_000) warning = `Reconecta Meta antes del ${ddmm(exp)} o los anuncios dejarán de sincronizarse.`;
     }
-    return { ok: true, provider, accounts, token: row.client_secret, warning };
+    return { ok: true, provider, accounts, token: row.client_secret, warning, details: row.details || {} };
   } catch (e) {
     const err = e instanceof AdsError ? e : new AdsError("transient", String(e));
     if (err.kind === "auth") await health(c, fetchFn, provider, "error", err.message);
@@ -131,6 +186,21 @@ async function setStatus(fetchFn: typeof fetch, conn: Extract<Connection, { ok: 
 
 const ACTION_STATUS: Record<StatusAction, CampaignStatus> = { pause: "paused", resume: "active", end: "ended" };
 
+async function launch(
+  fetchFn: typeof fetch, conn: Extract<Connection, { ok: true }>, account: string, spec: LaunchSpec, nowMs: number, sleep: Sleep,
+): Promise<LaunchResult> {
+  if (conn.provider === "meta_ads") {
+    // The Page the ad speaks as, and the Instagram account linked to it, both recorded when Meta was connected.
+    const page = conn.details.pages?.[0];
+    if (!page?.id) {
+      throw new AdsError("config", "Meta: esta conexión no ve ninguna Página. Reconecta Meta con una cuenta que administre la Página del restaurante.");
+    }
+    return metaLaunch(fetchFn, conn.token, account, { id: page.id, instagramId: page.instagram?.id || null }, spec, nowMs);
+  }
+  if (conn.provider === "tiktok_ads") return tiktokLaunch(fetchFn, conn.token, account, spec, nowMs, sleep);
+  return googleLaunch(fetchFn, conn.google!, account, spec, nowMs);
+}
+
 export async function handleAdsWorker(req: Request, deps: WorkerDeps): Promise<Response> {
   const c = workerConfig(deps.env);
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
@@ -139,6 +209,8 @@ export async function handleAdsWorker(req: Request, deps: WorkerDeps): Promise<R
 
   const nowMs = deps.now ? deps.now() : Date.now();
   const fetchFn = deps.fetch;
+  const sleep: Sleep = deps.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
+  let targeting: Promise<Targeting> | null = null;
   const summary: { jobs: { action: string; campaign: string; result: string }[]; synced: Record<string, number>; problems: string[] } =
     { jobs: [], synced: {}, problems: [] };
 
@@ -184,8 +256,19 @@ export async function handleAdsWorker(req: Request, deps: WorkerDeps): Promise<R
       }
 
       if (job.action === "launch") {
-        // Creating ads from the console arrives with the next part of this work.
-        throw new AdsError("platform", "Crear anuncios desde la consola todavía no está disponible. Créala en el administrador de anuncios de la plataforma; aparecerá aquí sola.");
+        targeting ??= loadTargeting(c, fetchFn);
+        const spec = launchSpec(camp, await targeting);
+        // Everything the owner can fix is caught before a single call to the platform.
+        const problem = validateLaunch(camp.provider, spec, nowMs);
+        if (problem) throw new AdsError("platform", problem);
+        const account = camp.account_id || conn.accounts[0];
+        const made = await launch(fetchFn, conn, account, spec, nowMs, sleep);
+        await rpc(c, fetchFn, "finish_campaign_job", {
+          p_job_id: job.job_id, p_ok: true,
+          p_campaign: { status: "active", external_id: made.campaignId, platform_ids: made.ids, account_id: account, platform_status: "ACTIVE" },
+        });
+        summary.jobs.push({ action: job.action, campaign: camp.name, result: "ok" });
+        continue;
       }
 
       if (job.action === "sync") {

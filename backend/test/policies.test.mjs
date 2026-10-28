@@ -34,6 +34,8 @@ await db.exec(`
   create table storage.buckets (id text primary key, name text, public boolean);
   create table storage.objects (id uuid primary key default gen_random_uuid(), bucket_id text, name text);
   alter table storage.objects enable row level security;
+  -- As on Supabase: the roles hold table privileges on storage.objects, and RLS decides per row.
+  grant select, insert, update, delete on storage.objects to anon, authenticated, service_role;
   grant usage on schema public, auth, storage to anon, authenticated, service_role;
   alter default privileges in schema public grant all on tables    to anon, authenticated, service_role;
   alter default privileges in schema public grant all on sequences to anon, authenticated, service_role;
@@ -102,10 +104,12 @@ await db.exec(sql("stripe_payments.sql"));
 await db.exec(sql("ads_oauth.sql"));
 await db.exec(sql("security_hardening.sql"));
 await db.exec(sql("ads_sync.sql"));
-// All three are documented as safe to run more than once.
+await db.exec(sql("ads_create.sql"));
+// All four are documented as safe to run more than once.
 await db.exec(sql("ads_oauth.sql"));
 await db.exec(sql("security_hardening.sql"));
 await db.exec(sql("ads_sync.sql"));
+await db.exec(sql("ads_create.sql"));
 
 await db.exec(`
   insert into auth.users values ('${OWNER}', 'o@x'), ('${STAFF}', 's@x'), ('${STRANGER}', 'x@x'), ('${DEACT}', 'd@x');
@@ -352,6 +356,27 @@ mh = await row(`select status::text, last_error from integrations where provider
 check("  ...cleared", mh.status === "connected" && mh.last_error === null);
 await expectOk("health never resurrects a disconnected platform", "service_role", null, `select set_integration_health('tiktok_ads', 'error', 'x')`);
 check("  ...TikTok stays disconnected", (await row(`select status::text s from integrations where provider = 'tiktok_ads'`)).s === "disconnected");
+
+console.log("\ncreating ads (ads_create.sql)");
+await expectOk("owner uploads an ad image", "authenticated", OWNER,
+  `insert into storage.objects (bucket_id, name) values ('ads', 'meta/1.jpg')`);
+await expectErr("staff cannot upload ad media", "authenticated", STAFF,
+  `insert into storage.objects (bucket_id, name) values ('ads', 'meta/2.jpg')`);
+await expectErr("a visitor cannot upload ad media", "anon", null,
+  `insert into storage.objects (bucket_id, name) values ('ads', 'meta/3.jpg')`);
+const seen = await expectOk("anyone can read it (the platforms fetch it by URL)", "anon", null,
+  `select name from storage.objects where bucket_id = 'ads'`);
+check("  ...one image, the owner's", seen?.rows.length === 1 && seen.rows[0].name === "meta/1.jpg");
+const tgt = (await row(`select value from settings where key = 'ads_targeting'`))?.value;
+check("default targeting: the restaurant's coordinates, 3 miles, gopicadera.com",
+  Math.abs(tgt?.lat - 40.6473819) < 1e-6 && Math.abs(tgt?.lng + 74.0121613) < 1e-6 && tgt?.radius_mi === 3 && tgt?.destination_url === "https://gopicadera.com", JSON.stringify(tgt));
+await db.exec(`update settings set value = jsonb_set(value, '{radius_mi}', '5') where key = 'ads_targeting'`);
+await db.exec(sql("ads_create.sql"));
+check("  ...and re-running the file keeps what the owner changed", (await row(`select value->>'radius_mi' r from settings where key = 'ads_targeting'`)).r === "5");
+await expectOk("owner saves a draft with everything a launch needs", "authenticated", OWNER,
+  `insert into campaigns (provider, name, headline, body, daily_budget, destination_url, media_url, radius_mi, google_assets, starts_at, ends_at)
+   values ('google_ads', 'Busqueda', 'h', 'b', 10, 'https://gopicadera.com', null, 3,
+           '{"headlines":["a","b","c"],"descriptions":["d","e"],"keywords":["k"]}', now(), now() + interval '7 days')`);
 
 // ---- 6. the readiness query Fellito pastes in the SQL editor -----------------------------------------
 console.log("\nreadiness query");
