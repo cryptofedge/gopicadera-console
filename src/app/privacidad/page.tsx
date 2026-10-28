@@ -24,14 +24,14 @@ export default function PrivacidadPage() {
       <p style={{ color: "var(--muted)", marginTop: 0 }}>Go Picadera · Consola · Actualizada el {UPDATED}</p>
 
       <h2 style={h2}>Quiénes somos</h2>
-      <p>
+      <p className="my-3">
         Go Picadera es un restaurante en 4820 4th Ave, Brooklyn, NY 11220. Esta consola (admin.gopicadera.com) es
         una herramienta interna que usan los dueños y el personal del restaurante para manejar pedidos, menú,
         inventario y los anuncios del propio restaurante.
       </p>
 
       <h2 style={h2}>Qué datos usa</h2>
-      <ul>
+      <ul className="list-disc pl-5 mt-1 space-y-1">
         <li>Los pedidos, el menú y el inventario del restaurante.</li>
         <li>
           Cuando un dueño conecta Meta (Facebook e Instagram), TikTok o Google Ads: el permiso de acceso que entrega
@@ -41,19 +41,19 @@ export default function PrivacidadPage() {
       </ul>
 
       <h2 style={h2}>Para qué</h2>
-      <p>
+      <p className="my-3">
         Solo para mostrar, crear, pausar y terminar los anuncios del propio restaurante desde la consola. No vendemos
         ni compartimos estos datos con nadie, y no los usamos para ningún otro fin.
       </p>
 
       <h2 style={h2}>Dónde se guardan</h2>
-      <p>
+      <p className="my-3">
         En la base de datos del restaurante, en Supabase (Estados Unidos). Los permisos de acceso de las plataformas
         nunca se envían al navegador: ni siquiera el dueño puede leerlos de vuelta.
       </p>
 
       <h2 id="borrar" style={h2}>Cómo borrar sus datos</h2>
-      <ul>
+      <ul className="list-disc pl-5 mt-1 space-y-1">
         <li>En la consola, <strong>Canales → Desconectar</strong> borra al instante el permiso guardado de esa plataforma.</li>
         <li>
           También puede quitar el acceso desde cada plataforma: en Facebook, Configuración → Integraciones comerciales;
@@ -66,7 +66,7 @@ export default function PrivacidadPage() {
       </ul>
 
       <h2 style={h2}>In English</h2>
-      <p>
+      <p className="my-3">
         This console is an internal tool of Go Picadera, a restaurant at 4820 4th Ave, Brooklyn, NY 11220. When an owner
         connects Meta, TikTok or Google Ads, it stores the access permission each platform issues, the restaurant&apos;s
         ad account and Page ids and names, and its campaigns with their reported metrics, solely to show and manage the
