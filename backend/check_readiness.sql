@@ -3,7 +3,8 @@
 --
 -- Paste into the Supabase SQL editor. Every row of the first result should say
 -- "ok". The second result shows each ad connection's state -- never a token.
--- Run after ads_oauth.sql and security_hardening.sql (see SETUP.md).
+-- Run after ads_oauth.sql, security_hardening.sql and ads_sync.sql (see SETUP.md).
+-- The worker's schedule (ads_schedule.sql) is checked at the end of ADS_WORKER.md.
 -- ============================================================================
 
 with col(name) as (
@@ -46,6 +47,23 @@ checks(item, passed) as (
   union all
   select 'Meta, TikTok and Google rows exist',
          (select count(*) = 3 from integrations where provider in ('meta_ads', 'tiktok_ads', 'google_ads'))
+  -- ads_sync.sql: what the ads worker reads and writes
+  union all
+  select 'campaigns.platform_ids column exists',
+         exists (select 1 from information_schema.columns
+                  where table_schema = 'public' and table_name = 'campaigns' and column_name = 'platform_ids')
+  union all
+  select 'ads worker functions exist',
+         (select count(distinct proname) = 4 from pg_proc
+           where proname in ('claim_campaign_jobs', 'finish_campaign_job', 'upsert_platform_campaigns', 'set_integration_health'))
+  union all
+  select 'queue trigger ignores the worker''s own writes',
+         exists (select 1 from pg_proc where proname = 'queue_campaign_job' and prosrc like '%gp.ads_worker%')
+  union all
+  select 'browser cannot call the ads worker functions',
+         case when exists (select 1 from pg_proc where proname = 'claim_campaign_jobs')
+              then not has_function_privilege('authenticated', 'claim_campaign_jobs(int)', 'EXECUTE')
+              else false end
 )
 select item, case when passed then 'ok' else 'MISSING' end as result
   from checks;

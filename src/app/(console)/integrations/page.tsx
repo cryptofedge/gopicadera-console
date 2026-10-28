@@ -37,10 +37,29 @@ type Row = {
   store_id: string | null;
   client_id: string | null;
   has_secret?: boolean;
+  // Non-secret facts the connect step recorded (Meta: Pages, their Instagram, token expiry).
+  details?: {
+    pages?: { id: string; name: string | null; instagram: { id: string; username: string | null } | null }[];
+    token_expires_at?: string | null;
+  } | null;
   last_order_at: string | null;
   last_error: string | null;
   auto_accept: boolean;
 };
+
+/** What a connected ad account is attached to, so the owner can see it is the right one. */
+function adsSummary(r: Row): string {
+  const parts: string[] = [];
+  const accounts = (r.store_id || "").split(",").filter(Boolean).length;
+  parts.push(accounts === 1 ? "1 cuenta de anuncios" : `${accounts} cuentas de anuncios`);
+  const page = r.details?.pages?.[0];
+  if (page) parts.push(`Página ${page.name ?? page.id}`);
+  if (page?.instagram) parts.push(`Instagram ${page.instagram.username ? "@" + page.instagram.username : "conectado"}`);
+  else if (r.provider === "meta_ads" && page) parts.push("sin Instagram vinculado a la página");
+  const exp = r.details?.token_expires_at;
+  if (exp) parts.push(`vence el ${new Date(exp).toLocaleDateString("es-DO", { day: "2-digit", month: "short" })}`);
+  return parts.join(" · ");
+}
 
 /**
  * `oauth: true` means the provider genuinely supports click-to-connect and the
@@ -278,7 +297,7 @@ export default function IntegrationsPage() {
     (sb) =>
       sb
         .from("integrations")
-        .select("provider, kind, status, store_id, client_id, has_secret, last_order_at, last_error, auto_accept")
+        .select("provider, kind, status, store_id, client_id, has_secret, details, last_order_at, last_error, auto_accept")
         .order("provider") as never,
   );
 
@@ -452,7 +471,7 @@ export default function IntegrationsPage() {
               </div>
 
               <p className="text-xs mb-3" style={{ color: "var(--muted)" }}>
-                {r.status === "connected" ? ago(r.last_order_at) : m.blurb}
+                {r.status !== "connected" ? m.blurb : r.kind === "ads" ? adsSummary(r) : ago(r.last_order_at)}
               </p>
 
               {r.last_error && (
@@ -461,7 +480,7 @@ export default function IntegrationsPage() {
                 </p>
               )}
 
-              {r.status === "connected" && r.provider !== "whatsapp" && (
+              {r.status === "connected" && r.provider !== "whatsapp" && r.kind !== "ads" && (
                 <label className="flex items-center gap-2 mb-3 text-xs cursor-pointer">
                   <input type="checkbox" checked={r.auto_accept} disabled={busy}
                          onChange={() => toggleAuto(r)} className="w-3.5 h-3.5" />

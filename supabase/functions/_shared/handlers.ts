@@ -58,7 +58,7 @@ function config(env: Env) {
   };
 }
 
-class RpcError extends Error {
+export class RpcError extends Error {
   status: number;
   constructor(status: number, message: string) {
     super(message);
@@ -66,7 +66,9 @@ class RpcError extends Error {
   }
 }
 
-async function rpc(c: ReturnType<typeof config>, fetchFn: typeof fetch, fn: string, args: Record<string, unknown>) {
+// Calls a database function with the service role. Exported for ads-worker.ts, which writes through the
+// same narrow service-role functions.
+export async function rpc(c: { supabaseUrl: string; serviceKey: string }, fetchFn: typeof fetch, fn: string, args: Record<string, unknown>) {
   const r = await fetchFn(`${c.supabaseUrl}/rest/v1/rpc/${fn}`, {
     method: "POST",
     headers: { apikey: c.serviceKey, Authorization: `Bearer ${c.serviceKey}`, "Content-Type": "application/json" },

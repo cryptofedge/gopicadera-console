@@ -10,7 +10,7 @@
     "test": "npm run test:functions && npm run test:sql",
     "test:functions": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"supabase/functions/_shared/*.test.ts\"",
     "test:sql": "node backend/test/policies.test.mjs",
-    "typecheck:functions": "tsc --noEmit --strict --allowImportingTsExtensions --target es2022 --module esnext --moduleResolution bundler --lib es2022,dom,dom.iterable --types node --skipLibCheck supabase/functions/_shared/handlers.ts supabase/functions/_shared/oauth.test.ts",
+    "typecheck:functions": "tsc --noEmit --strict --allowImportingTsExtensions --target es2022 --module esnext --moduleResolution bundler --lib es2022,dom,dom.iterable --types node --skipLibCheck supabase/functions/_shared/handlers.ts supabase/functions/_shared/ads-worker.ts supabase/functions/_shared/oauth.test.ts supabase/functions/_shared/ads.test.ts",
     "check:connect": "node scripts/check-connect.mjs"
   },
   "dependencies": {
