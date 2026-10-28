@@ -32,9 +32,10 @@ succeeded," not "the access token is valid right now." Before any feature is bui
 TikTok Ads API with this token (posting ads, reading spend, etc.), a refresh job needs to exist first, or
 every call will start failing with an expired token within a day of connecting.
 
-The refresh token is stored in `integrations.client_id` — there is no dedicated column for it, and that
-column is otherwise unused by any OAuth provider's connection (the manual-paste form that writes to it is
-hidden for them).
+The refresh token is stored in `integrations.refresh_token`, which no browser can select (see
+`security_hardening.sql`) and which Desconectar clears along with the access token. It used to be parked in
+`client_id`, which the Canales page reads; re-running `ads_oauth.sql` moves an old one across. A refresh job
+reads it with the service role.
 
 ## Files
 

@@ -12,6 +12,19 @@
 -- REST -- keeps the "what can this key actually do" surface small and auditable, matching
 -- apply_stripe_event in stripe_payments.sql.
 
+-- TikTok's refresh token gets a column of its own. It used to be parked in client_id, which the
+-- Canales page selects into the browser and Desconectar never cleared. security_hardening.sql
+-- leaves this column out of the browser's grants, like client_secret.
+alter table integrations add column if not exists refresh_token text;
+
+-- Move a token stored by the old version of apply_oauth_connection. Only tiktok_ads ever wrote one.
+update integrations
+   set refresh_token = client_id,
+       client_id     = null
+ where provider = 'tiktok_ads'
+   and refresh_token is null
+   and client_id is not null;
+
 -- Postgres treats a different argument count as a different, overloaded function even with a
 -- default on the new one -- it will not just extend the original. Drop the original 3-arg version
 -- first so there is only ever one `apply_oauth_connection`, never two ambiguous overloads.
@@ -22,9 +35,7 @@ create or replace function apply_oauth_connection(
   p_access_token text,
   p_account_id text,
   -- TikTok's access token expires every 24h and needs this to get a new one; Meta has nothing
-  -- like it (its long-lived token is used directly), so this stays null for meta_ads. There is no
-  -- dedicated column for it -- client_id is never used by any OAuth provider's own form (that
-  -- form is hidden for them), so it is repurposed here rather than adding a migration for one value.
+  -- like it (its long-lived token is used directly), so this stays null for meta_ads.
   p_refresh_token text default null
 ) returns void
 language plpgsql security definer set search_path = public as $$
@@ -40,7 +51,9 @@ begin
      set client_secret = p_access_token,
          -- one or more platform account ids, comma-joined; nothing presumes there is exactly one
          store_id      = nullif(trim(coalesce(p_account_id, '')), ''),
-         client_id     = nullif(trim(coalesce(p_refresh_token, '')), ''),
+         refresh_token = nullif(trim(coalesce(p_refresh_token, '')), ''),
+         -- no OAuth provider has a client id of its own; clears anything left by the old version
+         client_id     = null,
          status        = 'connected',
          last_error    = null,
          updated_at    = now()
