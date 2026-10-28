@@ -3,14 +3,14 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   AdsError, metaToCampaigns, metaError, tiktokToCampaigns, tiktokError, googleToCampaigns, googleError,
-  googleStatusOperation, metaStatus, tiktokStatus, googleStatus, validateLaunch,
+  googleStatusOperation, metaStatus, tiktokStatus, googleStatus, validateLaunch, GOOGLE_PROJECT_ACCESS_MESSAGE,
 } from "./ads-lib.ts";
 import type { LaunchSpec } from "./ads-lib.ts";
 import {
   metaListCampaigns, metaSetStatus, tiktokListCampaigns, tiktokSetStatus, googleMintAccessToken, googleListCampaigns, googleSetStatus,
-  metaLaunch, tiktokLaunch, googleLaunch,
+  metaLaunch, tiktokLaunch, googleLaunch, metaAdAccounts, metaPages, tiktokAdvertisers, googleAccessibleAccounts,
 } from "./ads-platforms.ts";
-import { handleAdsWorker } from "./ads-worker.ts";
+import { handleAdsWorker, forgetAdsWorkerSecret, NO_ACCOUNT_CHOSEN } from "./ads-worker.ts";
 
 type Call = { url: string; method: string; headers: Record<string, string>; body: string };
 type Route = [match: (call: Call) => boolean, reply: (call: Call) => Response | Promise<Response>];
@@ -168,13 +168,53 @@ test("google adapter: mints a token, sends the developer token, pages through re
   assert.equal(search.headers.authorization, "Bearer g-access");
 });
 
-test("google adapter: a revoked refresh token is an auth error, a missing developer token a config error", async () => {
+test("google adapter: a revoked refresh token is an auth error", async () => {
   const revoked = fakeFetch([[() => true, () => ok({ error: "invalid_grant", error_description: "Token has been expired or revoked." }, 400)]]);
   await assert.rejects(googleMintAccessToken(revoked.fn, "cid", "cs", "r"), (e: unknown) => e instanceof AdsError && e.kind === "auth");
-  const none = fakeFetch([]);
-  await assert.rejects(googleSetStatus(none.fn, { accessToken: "a", developerToken: "", loginCustomerId: "" }, "1", "2", "pause"),
-    (e: unknown) => e instanceof AdsError && e.kind === "config");
-  assert.equal(none.calls.length, 0);
+});
+
+test("google adapter: no developer token (sunset 2026-09-09) is fine -- the header is simply not sent", async () => {
+  const f = fakeFetch([[has("campaigns:mutate"), () => ok({ results: [{}] })]]);
+  await googleSetStatus(f.fn, { accessToken: "a", developerToken: "", loginCustomerId: "" }, "1", "2", "pause");
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.calls[0].headers["developer-token"], undefined);
+  assert.equal(f.calls[0].headers.authorization, "Bearer a");
+});
+
+test("google errors: a Cloud project without Explorer access is a config error with the fix in Spanish", () => {
+  const body = (code: string, message: string) => ({ error: { status: "PERMISSION_DENIED", message: "The caller does not have permission",
+    details: [{ errors: [{ errorCode: { authorizationError: code }, message }] }] } });
+  const notApproved = googleError(body("CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION", "The Google Cloud project is not approved for production access."), 403);
+  assert.equal(notApproved?.kind, "config");
+  assert.equal(notApproved?.message, GOOGLE_PROJECT_ACCESS_MESSAGE);
+  assert.match(GOOGLE_PROJECT_ACCESS_MESSAGE, /^El proyecto de Google Cloud aún no tiene acceso Explorer/);
+  // Google's known issue after 2026-09-09: a generic AUTHORIZATION_ERROR that is plainly about the project.
+  const upgraded = googleError(body("AUTHORIZATION_ERROR", "The Cloud project's access level does not allow this request."), 403);
+  assert.deepEqual([upgraded?.kind, upgraded?.message], ["config", GOOGLE_PROJECT_ACCESS_MESSAGE]);
+  // Any other AUTHORIZATION_ERROR keeps its old meaning: the login lost permission, reconnect.
+  const other = googleError(body("AUTHORIZATION_ERROR", "Authorization of the user failed."), 403);
+  assert.equal(other?.kind, "auth");
+  assert.equal(googleError(body("USER_PERMISSION_DENIED", "User doesn't have permission to access customer."), 403)?.kind, "auth");
+});
+
+test("account lists: Meta accounts and Pages with names, TikTok advertisers, Google customers with names", async () => {
+  const f = fakeFetch([
+    [has("/me/adaccounts"), () => ok({ data: [{ account_id: "111", id: "act_111", name: "Go Picadera" }, { account_id: 222 }] })],
+    [has("/me/accounts"), () => ok({ data: [{ id: "page-1", name: "Go Picadera", instagram_business_account: { id: "ig-1", username: "gopicadera" } }, { id: "page-2" }] })],
+    [has("/oauth2/advertiser/get/"), () => ok({ code: 0, data: { list: [{ advertiser_id: 7001, advertiser_name: "Go Picadera" }] } })],
+    [has("listAccessibleCustomers"), () => ok({ resourceNames: ["customers/1234567890", "customers/2222222222"] })],
+    [has("/customers/2222222222/googleAds:search"), () => ok({ results: [{ customer: { descriptiveName: "Nueva" } }] })],
+  ]);
+  assert.deepEqual(await metaAdAccounts(f.fn, "tok"), [{ id: "111", name: "Go Picadera" }, { id: "222", name: null }]);
+  assert.deepEqual(await metaPages(f.fn, "tok"), [
+    { id: "page-1", name: "Go Picadera", instagram: { id: "ig-1", username: "gopicadera" } },
+    { id: "page-2", name: null, instagram: null },
+  ]);
+  assert.deepEqual(await tiktokAdvertisers(f.fn, "app", "sec", "tt"), [{ id: "7001", name: "Go Picadera" }]);
+  // A name already known is not looked up again.
+  const google = await googleAccessibleAccounts(f.fn, { accessToken: "a", developerToken: "" }, [{ id: "1234567890", name: "Go Picadera" }]);
+  assert.deepEqual(google, [{ id: "1234567890", name: "Go Picadera" }, { id: "2222222222", name: "Nueva" }]);
+  assert.equal(f.calls.filter((c) => c.url.includes("googleAds:search")).length, 1);
 });
 
 // -------------------------------------------------------------------------------------- worker ---
@@ -188,25 +228,49 @@ const workerReq = (secret = "worker-secret", method = "POST") =>
   new Request(`${SUPA}/functions/v1/ads-worker`, { method, headers: { "x-ads-worker-secret": secret } });
 const rpcBodies = (calls: Call[], fn: string) => calls.filter((c) => c.url === `${SUPA}/rest/v1/rpc/${fn}`).map((c) => JSON.parse(c.body));
 
-function workerWorld(opts: { integrations: unknown[]; jobs?: unknown[]; extra?: Route[] }) {
+// Everything the login behind META_CONN reaches: Go Picadera's account and the connector's own, and two Pages,
+// the first of them not Go Picadera's -- so a worker that took "the first" of either would be caught.
+const META_ACCOUNTS = [{ id: "111", name: "Go Picadera" }, { id: "222", name: "Cuenta de Fellito" }];
+const META_PAGES = [
+  { id: "page-0", name: "Pruebas de Fellito", instagram: null },
+  { id: "page-1", name: "Go Picadera", instagram: { id: "ig-1", username: "gopicadera" } },
+];
+// Meta's answer to the two lists the worker reads again on every run, in Graph's own shape.
+const metaLists = (accounts: { id: string; name: string | null }[] = META_ACCOUNTS, pages: typeof META_PAGES = META_PAGES): Route[] => [
+  [has("/me/adaccounts"), () => ok({ data: accounts.map((a) => ({ account_id: a.id, name: a.name })) })],
+  [has("/me/accounts"), () => ok({ data: pages.map((p) => ({ id: p.id, name: p.name, ...(p.instagram ? { instagram_business_account: p.instagram } : {}) })) })],
+];
+
+function workerWorld(opts: { integrations: unknown[]; jobs?: unknown[]; extra?: Route[]; lists?: Route[]; apps?: unknown[]; vault?: unknown }) {
   return fakeFetch([
     [has(`${SUPA}/rest/v1/integrations`), () => ok(opts.integrations)],
+    [has(`${SUPA}/rest/v1/ads_apps`), () => ok(opts.apps || [])],
+    [has(`${SUPA}/rest/v1/rpc/ads_worker_secret`), () => ok(opts.vault ?? null)],
     [has(`${SUPA}/rest/v1/rpc/claim_campaign_jobs`), () => ok(opts.jobs || [])],
     [has(`${SUPA}/rest/v1/rpc/upsert_platform_campaigns`), (c) => ok(JSON.parse(c.body).p_rows.length)],
     [has(`${SUPA}/rest/v1/rpc/`), () => ok(null)],
+    ...(opts.lists || metaLists()),
     ...(opts.extra || []),
   ]);
 }
 
+const CHOSEN_AT = "2026-10-20T15:00:00.000Z";
 const META_CONN = {
-  provider: "meta_ads", status: "connected", client_secret: "meta-tok", store_id: "111",
+  provider: "meta_ads", status: "connected", client_secret: "meta-tok", store_id: "111", last_error: null,
   details: {
     token_expires_at: new Date(NOW + 40 * 86400_000).toISOString(),
-    pages: [{ id: "page-1", name: "Go Picadera", instagram: { id: "ig-1" } }],
+    ad_accounts: META_ACCOUNTS, pages: META_PAGES, page_id: "page-1", chosen_at: CHOSEN_AT,
   },
 };
 const TARGETING = { lat: 40.6473819, lng: -74.0121613, radius_mi: 3, destination_url: "https://gopicadera.com", tiktok_location_ids: ["5128581"] };
-const GOOGLE_CONN = { provider: "google_ads", status: "connected", client_secret: "g-refresh", store_id: "1234567890", details: {} };
+const GOOGLE_CONN = {
+  provider: "google_ads", status: "connected", client_secret: "g-refresh", store_id: "1234567890", last_error: null,
+  details: { ad_accounts: [{ id: "1234567890", name: "Go Picadera" }], chosen_at: CHOSEN_AT },
+};
+const TIKTOK_CONN = {
+  provider: "tiktok_ads", status: "connected", client_secret: "tt-tok", store_id: "7001", last_error: null,
+  details: { ad_accounts: [{ id: "7001", name: "Go Picadera" }], chosen_at: CHOSEN_AT },
+};
 const campaign = (over: Record<string, unknown>) => ({ id: "cp-1", provider: "meta_ads", name: "Mofongo", status: "paused", external_id: "c1", account_id: "111", platform_ids: { campaign: "c1" }, ...over });
 
 const META_PLATFORM: Route[] = [
@@ -214,13 +278,81 @@ const META_PLATFORM: Route[] = [
   [has("/act_111/campaigns"), () => ok({ data: [{ id: "c1", name: "Mofongo", effective_status: "PAUSED" }] })],
   [has("/act_111/insights"), () => ok({ data: [{ campaign_id: "c1", spend: "12.5" }] })],
 ];
+const GOOGLE_PLATFORM: Route[] = [
+  [has("oauth2.googleapis.com/token"), () => ok({ access_token: "g-access", expires_in: 3599 })],
+  [has("customers:listAccessibleCustomers"), () => ok({ resourceNames: ["customers/1234567890"] })],
+  [has("/customers/1234567890/googleAds:search"), () => ok({ results: [{ campaign: { id: "555", name: "Chimi", status: "ENABLED" } }] })],
+];
 
 test("worker: refuses anything but a POST carrying the shared secret", async () => {
   assert.equal((await handleAdsWorker(workerReq("worker-secret", "GET"), { env: ENV, fetch: fakeFetch([]).fn })).status, 405);
-  assert.equal((await handleAdsWorker(workerReq("wrong"), { env: ENV, fetch: fakeFetch([]).fn })).status, 401);
-  assert.equal((await handleAdsWorker(workerReq(), { env: { ...ENV, ADS_WORKER_SECRET: "" }, fetch: fakeFetch([]).fn })).status, 503);
+  const f = fakeFetch([]);
+  assert.equal((await handleAdsWorker(workerReq("wrong"), { env: ENV, fetch: f.fn })).status, 401);
+  assert.equal(f.calls.length, 0, "an env secret needs no database call to refuse");
 });
 
+// ---- the secret, from Vault ----------------------------------------------------------------------
+const NO_ENV_SECRET = { ...ENV, ADS_WORKER_SECRET: "" };
+const secretReads = (calls: Call[]) => calls.filter((c) => c.url === `${SUPA}/rest/v1/rpc/ads_worker_secret`);
+
+test("worker secret: an ADS_WORKER_SECRET env var is used as is, and Vault is never asked", async () => {
+  forgetAdsWorkerSecret();
+  const f = workerWorld({ integrations: [], vault: "vault-secret" });
+  assert.equal((await handleAdsWorker(workerReq("worker-secret"), { env: ENV, fetch: f.fn, now: () => NOW })).status, 200);
+  assert.equal((await handleAdsWorker(workerReq("vault-secret"), { env: ENV, fetch: f.fn, now: () => NOW })).status, 401);
+  assert.equal(secretReads(f.calls).length, 0);
+});
+
+test("worker secret: without the env var it comes from Vault through the service key, and is kept for five minutes", async () => {
+  forgetAdsWorkerSecret();
+  const f = workerWorld({ integrations: [], vault: "vault-secret" });
+  const run = (at: number) => handleAdsWorker(workerReq("vault-secret"), { env: NO_ENV_SECRET, fetch: f.fn, now: () => at });
+  assert.equal((await run(NOW)).status, 200);
+  const [read] = secretReads(f.calls);
+  assert.equal(read.method, "POST");
+  assert.equal(read.headers.authorization, "Bearer service-key");
+  assert.equal(read.headers.apikey, "service-key");
+  assert.equal((await run(NOW + 4 * 60_000)).status, 200);
+  assert.equal(secretReads(f.calls).length, 1, "cached");
+  assert.equal((await run(NOW + 6 * 60_000)).status, 200);
+  assert.equal(secretReads(f.calls).length, 2, "read again once the five minutes are up");
+  forgetAdsWorkerSecret();
+});
+
+test("worker secret: a wrong secret is 401 before any other work, and a flood of them costs one database call", async () => {
+  forgetAdsWorkerSecret();
+  const f = workerWorld({ integrations: [META_CONN], vault: "vault-secret" });
+  for (let i = 0; i < 5; i++) {
+    const res = await handleAdsWorker(workerReq("guess-" + i), { env: NO_ENV_SECRET, fetch: f.fn, now: () => NOW + i * 1000 });
+    assert.equal(res.status, 401);
+    assert.ok(!JSON.stringify(await res.json()).includes("vault-secret"));
+  }
+  assert.equal(f.calls.length, 1, "only the one Vault read: no integrations, no jobs, no platform");
+  forgetAdsWorkerSecret();
+});
+
+test("worker secret: with neither the env var nor a Vault secret it answers 503 not_configured", async () => {
+  forgetAdsWorkerSecret();
+  const empty = workerWorld({ integrations: [], vault: null });
+  for (let i = 0; i < 3; i++) {
+    const res = await handleAdsWorker(workerReq("anything"), { env: NO_ENV_SECRET, fetch: empty.fn, now: () => NOW });
+    assert.equal(res.status, 503);
+    assert.deepEqual(await res.json(), { error: "not_configured" });
+  }
+  assert.equal(secretReads(empty.calls).length, 1, "a missing secret is remembered too, so it cannot be hammered");
+
+  forgetAdsWorkerSecret();
+  const broken = fakeFetch([[() => true, () => ok({ message: "permission denied for function ads_worker_secret" }, 403)]]);
+  assert.equal((await handleAdsWorker(workerReq("anything"), { env: NO_ENV_SECRET, fetch: broken.fn, now: () => NOW })).status, 503);
+
+  forgetAdsWorkerSecret();
+  const none = fakeFetch([]);
+  assert.equal((await handleAdsWorker(workerReq("anything"), { env: { ...NO_ENV_SECRET, SUPABASE_SERVICE_ROLE_KEY: "" }, fetch: none.fn })).status, 503);
+  assert.equal(none.calls.length, 0);
+  forgetAdsWorkerSecret();
+});
+
+// ---- connections and jobs ------------------------------------------------------------------------
 test("worker: a queued pause reaches Meta, the job closes with the new status, then the account is synced", async () => {
   const f = workerWorld({
     integrations: [META_CONN],
@@ -236,12 +368,88 @@ test("worker: a queued pause reaches Meta, the job closes with the new status, t
   const [upsert] = rpcBodies(f.calls, "upsert_platform_campaigns");
   assert.equal(upsert.p_provider, "meta_ads");
   assert.equal(upsert.p_rows[0].spend, 12.5);
+  // The lists came back the same, so the only health write is the sync's.
   const [h] = rpcBodies(f.calls, "set_integration_health");
   assert.deepEqual(h, { p_provider: "meta_ads", p_status: "connected", p_last_error: null });
   // The answer is a summary for a human, and never carries a token.
   const body = await res.json() as { synced: Record<string, number> };
   assert.equal(body.synced.meta_ads, 1);
   assert.ok(!JSON.stringify(body).includes("meta-tok"));
+});
+
+test("worker: with no account chosen nothing is synced or launched, the console is told, and the lists are refreshed", async () => {
+  const unchosen = { ...META_CONN, store_id: null, details: { token_expires_at: META_CONN.details.token_expires_at } };
+  const draft = campaign({ status: "publishing", external_id: null, platform_ids: {}, account_id: null, headline: "h", body: "b", daily_budget: 5, media_url: "https://x/1.jpg" });
+  const f = workerWorld({
+    integrations: [unchosen],
+    jobs: [{ job_id: "j20", action: "launch", attempts: 1, campaign: draft }, { job_id: "j21", action: "sync", attempts: 1, campaign: campaign({}) }],
+  });
+  const res = await handleAdsWorker(workerReq(), { env: ENV, fetch: f.fn, now: () => NOW });
+  assert.equal(f.calls.filter((c) => c.url.includes("/act_")).length, 0, "no ad account was touched");
+  assert.equal(rpcBodies(f.calls, "upsert_platform_campaigns").length, 0);
+  const done = rpcBodies(f.calls, "finish_campaign_job");
+  assert.deepEqual(done.map((d) => [d.p_ok, d.p_error, d.p_retry]), [[false, NO_ACCOUNT_CHOSEN, false], [false, NO_ACCOUNT_CHOSEN, false]]);
+  const [h] = rpcBodies(f.calls, "set_integration_health");
+  assert.equal(h.p_status, null, "status unchanged");
+  assert.equal(h.p_last_error, "Elige la cuenta publicitaria de Go Picadera en Canales");
+  assert.deepEqual(h.p_details, { ad_accounts: META_ACCOUNTS, pages: META_PAGES }, "what the owner chooses from");
+  assert.ok((await res.json() as { problems: string[] }).problems.includes(`Meta: ${NO_ACCOUNT_CHOSEN}`));
+});
+
+test("worker: a comma list or an id nobody chose (what the old callback stored) is not a choice", async () => {
+  for (const [store_id, chosen_at] of [["111,222", CHOSEN_AT], ["111", undefined]] as const) {
+    const legacy = { ...META_CONN, store_id, details: { ...META_CONN.details, chosen_at } };
+    const f = workerWorld({ integrations: [legacy] });
+    await handleAdsWorker(workerReq(), { env: ENV, fetch: f.fn, now: () => NOW });
+    assert.equal(f.calls.filter((c) => c.url.includes("/act_")).length, 0, store_id);
+    assert.equal(rpcBodies(f.calls, "set_integration_health")[0].p_last_error, NO_ACCOUNT_CHOSEN);
+  }
+});
+
+test("worker: only the chosen account is synced, though the login reaches others", async () => {
+  const f = workerWorld({ integrations: [META_CONN], extra: [...META_PLATFORM, [has("/act_222/"), () => ok({ data: [{ id: "x9" }] })]] });
+  await handleAdsWorker(workerReq(), { env: ENV, fetch: f.fn, now: () => NOW });
+  assert.ok(f.calls.some((c) => c.url.includes("/act_111/campaigns")));
+  assert.equal(f.calls.filter((c) => c.url.includes("/act_222/")).length, 0);
+  const [upsert] = rpcBodies(f.calls, "upsert_platform_campaigns");
+  assert.deepEqual(upsert.p_rows.map((r: { account_id: string }) => r.account_id), ["111"]);
+});
+
+test("worker: an account granted later appears in the lists without touching the status or the note", async () => {
+  const warned = { ...META_CONN, last_error: "Reconecta Meta antes del 02/11 o los anuncios dejarán de sincronizarse." };
+  const later = [...META_ACCOUNTS, { id: "333", name: "Nueva" }];
+  const f = workerWorld({ integrations: [warned], lists: metaLists(later), extra: META_PLATFORM });
+  await handleAdsWorker(workerReq(), { env: ENV, fetch: f.fn, now: () => NOW });
+  const [lists] = rpcBodies(f.calls, "set_integration_health");
+  assert.deepEqual(lists, { p_provider: "meta_ads", p_status: null, p_last_error: warned.last_error, p_details: { ad_accounts: later } });
+  assert.equal(rpcBodies(f.calls, "upsert_platform_campaigns").length, 1, "and the chosen account is still synced");
+});
+
+test("worker: a chosen account the login no longer reaches stops the work and says so", async () => {
+  const f = workerWorld({ integrations: [META_CONN], lists: metaLists([META_ACCOUNTS[1]]), extra: META_PLATFORM });
+  await handleAdsWorker(workerReq(), { env: ENV, fetch: f.fn, now: () => NOW });
+  assert.equal(f.calls.filter((c) => c.url.includes("/act_")).length, 0);
+  const [h] = rpcBodies(f.calls, "set_integration_health");
+  assert.ok(h.p_last_error.startsWith(NO_ACCOUNT_CHOSEN), h.p_last_error);
+  assert.match(h.p_last_error, /111/);
+  assert.equal(h.p_status, null);
+});
+
+test("worker: a job on a campaign from another account is refused and nothing is sent", async () => {
+  const foreign = campaign({ id: "cp-9", account_id: "222", platform_ids: { campaign: "c9" }, external_id: "c9", status: "paused" });
+  const f = workerWorld({
+    integrations: [META_CONN],
+    jobs: [{ job_id: "j30", action: "pause", attempts: 1, campaign: foreign }, { job_id: "j31", action: "sync", attempts: 1, campaign: foreign }],
+    extra: META_PLATFORM,
+  });
+  await handleAdsWorker(workerReq(), { env: ENV, fetch: f.fn, now: () => NOW });
+  assert.equal(f.calls.filter((c) => c.method === "POST" && c.url.includes("facebook.com")).length, 0);
+  const done = rpcBodies(f.calls, "finish_campaign_job");
+  assert.equal(done.length, 2);
+  for (const d of done) {
+    assert.deepEqual([d.p_ok, d.p_retry], [false, false]);
+    assert.match(d.p_error, /cuenta publicitaria 222, no de la que se eligió en Canales \(111\)/);
+  }
 });
 
 test("worker: a launch the owner still has to fix is refused before anything reaches the platform", async () => {
@@ -259,7 +467,7 @@ test("worker: a launch the owner still has to fix is refused before anything rea
 });
 
 test("worker: a Meta token close to expiry keeps working but leaves a warning for the console", async () => {
-  const soon = { ...META_CONN, details: { token_expires_at: new Date(NOW + 5 * 86400_000).toISOString() } };
+  const soon = { ...META_CONN, details: { ...META_CONN.details, token_expires_at: new Date(NOW + 5 * 86400_000).toISOString() } };
   const f = workerWorld({ integrations: [soon], extra: META_PLATFORM });
   await handleAdsWorker(workerReq(), { env: ENV, fetch: f.fn, now: () => NOW });
   const [h] = rpcBodies(f.calls, "set_integration_health");
@@ -268,7 +476,7 @@ test("worker: a Meta token close to expiry keeps working but leaves a warning fo
 });
 
 test("worker: an expired Meta token marks the connection broken and nothing is sent to Meta", async () => {
-  const expired = { ...META_CONN, details: { token_expires_at: new Date(NOW - 86400_000).toISOString() } };
+  const expired = { ...META_CONN, details: { ...META_CONN.details, token_expires_at: new Date(NOW - 86400_000).toISOString() } };
   const f = workerWorld({ integrations: [expired], jobs: [{ job_id: "j3", action: "pause", attempts: 1, campaign: campaign({}) }] });
   await handleAdsWorker(workerReq(), { env: ENV, fetch: f.fn, now: () => NOW });
   assert.equal(f.calls.filter((c) => c.url.includes("facebook.com")).length, 0);
@@ -293,9 +501,60 @@ test("worker: a revoked Google permission is recorded and its jobs fail with the
   assert.equal(f.calls.filter((c) => c.url.includes("googleads.googleapis.com")).length, 0);
 });
 
+test("worker: Google works with no developer token, and with the client the owner saved in Canales", async () => {
+  const env = { ...ENV, GOOGLE_ADS_DEVELOPER_TOKEN: "", GOOGLE_ADS_CLIENT_ID: "", GOOGLE_ADS_CLIENT_SECRET: "" };
+  const f = workerWorld({
+    integrations: [GOOGLE_CONN], lists: [], extra: GOOGLE_PLATFORM,
+    apps: [{ provider: "google_ads", app_id: "1234-abc.apps.googleusercontent.com", app_secret: "db-g-secret", login_config_id: null }],
+  });
+  const res = await handleAdsWorker(workerReq(), { env, fetch: f.fn, now: () => NOW });
+  assert.equal((await res.json() as { synced: Record<string, number> }).synced.google_ads, 1);
+  const mint = new URLSearchParams(f.calls.find((c) => c.url.includes("oauth2.googleapis.com/token"))!.body);
+  assert.deepEqual([mint.get("client_id"), mint.get("client_secret")], ["1234-abc.apps.googleusercontent.com", "db-g-secret"]);
+  const google = f.calls.filter((c) => c.url.includes("googleads.googleapis.com"));
+  assert.ok(google.length >= 2);
+  assert.ok(google.every((c) => !("developer-token" in c.headers)));
+  assert.equal(rpcBodies(f.calls, "set_integration_health").at(-1).p_status, "connected");
+});
+
+test("worker: Google with no app anywhere, or a Cloud project without API access, is a note for Fellito, not a broken connection", async () => {
+  const noApp = workerWorld({ integrations: [GOOGLE_CONN], lists: [] });
+  await handleAdsWorker(workerReq(), { env: { ...ENV, GOOGLE_ADS_CLIENT_ID: "" }, fetch: noApp.fn, now: () => NOW });
+  let [h] = rpcBodies(noApp.calls, "set_integration_health");
+  assert.equal(h.p_status, null);
+  assert.match(h.p_last_error, /falta la app de Google/);
+
+  const notApproved = { error: { status: "PERMISSION_DENIED", message: "x", details: [{ errors: [{ errorCode: { authorizationError: "CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION" }, message: "not approved" }] }] } };
+  const f = workerWorld({
+    integrations: [GOOGLE_CONN], lists: [],
+    extra: [[has("oauth2.googleapis.com/token"), () => ok({ access_token: "g-access" })], [has("googleads.googleapis.com"), () => ok(notApproved, 403)]],
+  });
+  await handleAdsWorker(workerReq(), { env: ENV, fetch: f.fn, now: () => NOW });
+  [h] = rpcBodies(f.calls, "set_integration_health");
+  assert.deepEqual([h.p_status, h.p_last_error], [null, GOOGLE_PROJECT_ACCESS_MESSAGE]);
+});
+
+test("worker: TikTok's advertisers are read again with the app the owner saved", async () => {
+  const f = workerWorld({
+    integrations: [TIKTOK_CONN], lists: [],
+    apps: [{ provider: "tiktok_ads", app_id: "7300", app_secret: "db-tt-secret", login_config_id: null }],
+    extra: [
+      [has("/oauth2/advertiser/get/"), () => ok({ code: 0, data: { list: [{ advertiser_id: "7001", advertiser_name: "Go Picadera" }, { advertiser_id: "7002", advertiser_name: "Nueva" }] } })],
+      [has("business-api.tiktok.com"), () => ok({ code: 0, data: { list: [], page_info: { total_page: 1 } } })],
+    ],
+  });
+  await handleAdsWorker(workerReq(), { env: ENV, fetch: f.fn, now: () => NOW });
+  const read = new URL(f.calls.find((c) => c.url.includes("/oauth2/advertiser/get/"))!.url);
+  assert.deepEqual([read.searchParams.get("app_id"), read.searchParams.get("secret")], ["7300", "db-tt-secret"]);
+  const [lists] = rpcBodies(f.calls, "set_integration_health");
+  assert.deepEqual(lists.p_details, { ad_accounts: [{ id: "7001", name: "Go Picadera" }, { id: "7002", name: "Nueva" }] });
+  assert.ok(f.calls.some((c) => c.url.includes("/campaign/get/") && c.url.includes("advertiser_id=7001")));
+  assert.equal(f.calls.filter((c) => c.url.includes("advertiser_id=7002")).length, 0);
+});
+
 test("worker: a rate limit leaves the job for the next run", async () => {
   const f = workerWorld({
-    integrations: [{ provider: "tiktok_ads", status: "connected", client_secret: "tt-tok", store_id: "7001", details: {} }],
+    integrations: [TIKTOK_CONN], lists: [],
     jobs: [{ job_id: "j5", action: "resume", attempts: 1, campaign: campaign({ provider: "tiktok_ads", account_id: "7001", platform_ids: { campaign: "9001" }, external_id: "9001" }) }],
     extra: [[has("business-api.tiktok.com"), () => ok({ code: 40100, message: "Too many requests" })]],
   });
@@ -479,37 +738,46 @@ test("google launch: a refused batch creates nothing and switches nothing on", a
   assert.equal(f.calls.length, 1, "stopped at the dry run");
 });
 
-test("worker: a Meta launch end to end records the campaign as active with every id", async () => {
-  const draft = campaign({
-    status: "publishing", external_id: null, platform_ids: {}, account_id: "111",
-    name: SPEC.name, headline: SPEC.headline, body: SPEC.body, daily_budget: "15.00", ends_at: SPEC.endsAt, media_url: SPEC.mediaUrl,
-  });
+const launchWorld = (conn: unknown, draft: unknown, lists?: Route[]) => {
   const meta = fakeMeta();
-  const f = workerWorld({
-    integrations: [META_CONN], jobs: [{ job_id: "j9", action: "launch", attempts: 1, campaign: draft }],
+  return workerWorld({
+    integrations: [conn], jobs: [{ job_id: "j9", action: "launch", attempts: 1, campaign: draft }], lists,
     extra: [
       [has(`${SUPA}/rest/v1/settings`), () => ok([{ value: TARGETING }])],
       [(c) => c.url.includes("/act_111/campaigns?") || c.url.includes("/act_111/insights"), () => ok({ data: [] })],
       [(c) => c.url.includes("facebook.com") || c.url.includes("/storage/"), (c) => (meta.fn as (u: string, i: RequestInit) => Promise<Response>)(c.url, { method: c.method, body: c.body })],
     ],
   });
+};
+const metaDraft = (over: Record<string, unknown> = {}) => campaign({
+  status: "publishing", external_id: null, platform_ids: {}, account_id: null,
+  name: SPEC.name, headline: SPEC.headline, body: SPEC.body, daily_budget: "15.00", ends_at: SPEC.endsAt, media_url: SPEC.mediaUrl, ...over,
+});
+
+test("worker: a Meta launch end to end, on the chosen account as the chosen Page, records the campaign as active with every id", async () => {
+  const f = launchWorld(META_CONN, metaDraft());
   await handleAdsWorker(workerReq(), { env: ENV, fetch: f.fn, now: () => NOW, sleep: noSleep });
   const [done] = rpcBodies(f.calls, "finish_campaign_job");
   assert.equal(done.p_ok, true, JSON.stringify(done));
   assert.equal(done.p_campaign.status, "active");
+  assert.equal(done.p_campaign.account_id, "111");
   assert.match(done.p_campaign.external_id, /^campaigns-\d+$/);
   assert.deepEqual(Object.keys(done.p_campaign.platform_ids).sort(), ["ad", "adset", "campaign", "creative", "image_hash"]);
+  // page-1 is the chosen Page and the second in the list; its Instagram account goes with it.
+  const creative = f.calls.find((c) => c.url.endsWith("/act_111/adcreatives"))!;
+  const story = JSON.parse(new URLSearchParams(creative.body).get("object_story_spec")!);
+  assert.deepEqual([story.page_id, story.instagram_user_id], ["page-1", "ig-1"]);
+  assert.ok(f.calls.filter((c) => c.method === "POST" && c.url.includes("/act_")).every((c) => c.url.includes("/act_111/")));
 });
 
-test("worker: a Meta connection that sees no Page explains how to fix it", async () => {
-  const noPage = { ...META_CONN, details: { token_expires_at: META_CONN.details.token_expires_at } };
-  const draft = campaign({ status: "publishing", external_id: null, platform_ids: {}, headline: "h", body: "b", daily_budget: 5, media_url: SPEC.mediaUrl });
-  const f = workerWorld({
-    integrations: [noPage], jobs: [{ job_id: "j10", action: "launch", attempts: 1, campaign: draft }],
-    extra: [[has(`${SUPA}/rest/v1/settings`), () => ok([{ value: TARGETING }])], ...META_PLATFORM],
-  });
-  await handleAdsWorker(workerReq(), { env: ENV, fetch: f.fn, now: () => NOW });
-  const [done] = rpcBodies(f.calls, "finish_campaign_job");
-  assert.equal(done.p_ok, false);
-  assert.match(done.p_error, /ninguna Página/);
+test("worker: a Meta launch with no Page chosen, or one the login no longer sees, asks for the Page in Canales", async () => {
+  const noPage = { ...META_CONN, details: { ...META_CONN.details, page_id: undefined } };
+  for (const [conn, lists] of [[noPage, undefined], [META_CONN, metaLists(META_ACCOUNTS, [META_PAGES[0]])]] as const) {
+    const f = launchWorld(conn, metaDraft(), lists);
+    await handleAdsWorker(workerReq(), { env: ENV, fetch: f.fn, now: () => NOW, sleep: noSleep });
+    const [done] = rpcBodies(f.calls, "finish_campaign_job");
+    assert.equal(done.p_ok, false);
+    assert.match(done.p_error, /elige en Canales la Página de Facebook de Go Picadera/);
+    assert.equal(f.calls.filter((c) => c.method === "POST" && c.url.includes("facebook.com")).length, 0);
+  }
 });

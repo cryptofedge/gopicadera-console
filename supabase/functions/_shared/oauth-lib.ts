@@ -85,10 +85,14 @@ export function metaLongLivedExchangeUrl(appId: string, appSecret: string, short
   return u.toString();
 }
 
+// Every ad account this login reaches, with its name, so the owner can pick Go Picadera's in Canales. The
+// person connecting may reach other businesses' accounts too; nothing is used until one is chosen.
+// Meta pages these 25 at a time by default; the larger page keeps it to one call, and paging.next is followed.
 export function metaAdAccountsUrl(accessToken: string): string {
   const u = new URL(`https://graph.facebook.com/${META_GRAPH_VERSION}/me/adaccounts`);
   u.searchParams.set("access_token", accessToken);
   u.searchParams.set("fields", "account_id,name");
+  u.searchParams.set("limit", "200");
   return u.toString();
 }
 
@@ -98,6 +102,7 @@ export function metaPagesUrl(accessToken: string): string {
   const u = new URL(`https://graph.facebook.com/${META_GRAPH_VERSION}/me/accounts`);
   u.searchParams.set("access_token", accessToken);
   u.searchParams.set("fields", "id,name,instagram_business_account{id,username}");
+  u.searchParams.set("limit", "200");
   return u.toString();
 }
 

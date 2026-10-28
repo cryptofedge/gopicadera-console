@@ -3,12 +3,14 @@
 // Read-only. It sends a bare GET to each OAuth callback, which never writes anything: with no signed
 // state the callback just bounces to the console (see supabase/functions/_shared/oauth.test.ts).
 //
-//   302  the function is deployed and OAUTH_STATE_SECRET is set
-//   503  deployed, but OAUTH_STATE_SECRET is missing
+//   302  deployed, and the owner has saved this platform's app (its id and secret) in Canales
+//   503  deployed, but the owner has not saved the app in Canales yet
 //   404  the function is not deployed
 //
-// A 302 cannot prove the platform's own app id and secret are right -- only a real connect can. That is
-// the last step before anyone tells the owner: connect once from the console and see "quedó conectado".
+// Nothing has to be set in the Supabase dashboard: the app id and secret come from Canales (the ads_apps
+// table), and the key that signs the OAuth state is derived from the service-role key Supabase injects.
+// A 302 cannot prove the app id and secret are right -- only a real connect can. That is the last step:
+// connect once from Canales, see "quedó conectado", then choose Go Picadera's ad account on the card.
 
 const BASE = (process.env.SUPABASE_URL || "https://kfuamhhfthfmavxppagb.supabase.co").replace(/\/$/, "");
 
@@ -19,8 +21,8 @@ const CALLBACKS = [
 ];
 
 const MEANING = {
-  302: "ready (deployed, state secret set)",
-  503: "secrets missing: set OAUTH_STATE_SECRET (and this platform's app id/secret) in Supabase",
+  302: "ready (deployed, app saved in Canales)",
+  503: "the owner has not saved this platform's app (id and secret) in Canales yet",
   404: "function not deployed",
 };
 
@@ -37,5 +39,5 @@ for (const [name, fn] of CALLBACKS) {
   console.log(`${status === 302 ? "OK  " : "--  "} ${name.padEnd(28)} ${status}  ${MEANING[status] ?? "unexpected answer"}`);
 }
 
-console.log(`\n${ready}/${CALLBACKS.length} ready.${ready === CALLBACKS.length ? " Next: connect once from the console (Canales) and look for \"quedó conectado\"." : ""}`);
+console.log(`\n${ready}/${CALLBACKS.length} ready.${ready === CALLBACKS.length ? " Next: connect once from the console (Canales), look for \"quedó conectado\", and choose the ad account." : ""}`);
 process.exit(ready === CALLBACKS.length ? 0 : 1);

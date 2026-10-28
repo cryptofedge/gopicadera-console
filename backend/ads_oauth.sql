@@ -39,14 +39,22 @@ drop function if exists apply_oauth_connection(integration_provider, text, text,
 create or replace function apply_oauth_connection(
   p_provider integration_provider,
   p_access_token text,
+  -- Every ad account the login reaches, comma-joined. A list to choose from, never the choice itself:
+  -- the person who connects may reach other businesses' accounts too (see ads_accounts.sql).
   p_account_id text,
   -- Only kept if a platform sends one. TikTok's advertiser token is long-term and normally has none;
   -- Meta has nothing like it; Google's durable credential arrives as p_access_token.
   p_refresh_token text default null,
-  -- Non-secret facts about the connection; replaces whatever an earlier connection left.
+  -- Non-secret facts about the connection (ad_accounts, pages, token expiry); replaces whatever an
+  -- earlier connection left, except the owner's choice, which is kept below while it is still valid.
   p_details jsonb default null
 ) returns void
 language plpgsql security definer set search_path = public as $$
+declare
+  prev        integrations%rowtype;
+  accessible  text[];
+  kept_store  text;
+  new_details jsonb := coalesce(p_details, '{}'::jsonb);
 begin
   if p_provider not in ('meta_ads', 'tiktok_ads', 'google_ads') then
     raise exception 'apply_oauth_connection: % does not use the OAuth path', p_provider;
@@ -55,22 +63,40 @@ begin
     raise exception 'apply_oauth_connection: empty access token';
   end if;
 
+  select * into prev from integrations where provider = p_provider for update;
+  if not found then
+    raise exception 'apply_oauth_connection: no integrations row for %', p_provider;
+  end if;
+
+  accessible := array(
+    select trim(x) from unnest(string_to_array(coalesce(p_account_id, ''), ',')) as x where trim(x) <> ''
+  );
+
+  -- store_id holds at most one id: the account an owner chose with choose_ads_account, which marks it
+  -- with details.chosen_at. It survives a reconnect only while this login still reaches it. A store_id
+  -- with no chosen_at was never chosen by anyone (the old callback stored every account), so it goes.
+  if prev.store_id = any(accessible) and coalesce(prev.details ->> 'chosen_at', '') <> '' then
+    kept_store  := prev.store_id;
+    new_details := new_details || jsonb_build_object('chosen_at', prev.details -> 'chosen_at');
+  end if;
+
+  -- Same for the Facebook Page the ads speak as: kept only if this login still sees it.
+  if coalesce(prev.details ->> 'page_id', '') <> ''
+     and jsonb_path_exists(new_details, '$.pages[*] ? (@.id == $id)', jsonb_build_object('id', prev.details ->> 'page_id')) then
+    new_details := new_details || jsonb_build_object('page_id', prev.details ->> 'page_id');
+  end if;
+
   update integrations
      set client_secret = p_access_token,
-         -- one or more platform account ids, comma-joined; nothing presumes there is exactly one
-         store_id      = nullif(trim(coalesce(p_account_id, '')), ''),
+         store_id      = kept_store,
          refresh_token = nullif(trim(coalesce(p_refresh_token, '')), ''),
          -- no OAuth provider has a client id of its own; clears anything left by the old version
          client_id     = null,
-         details       = coalesce(p_details, '{}'::jsonb),
+         details       = new_details,
          status        = 'connected',
          last_error    = null,
          updated_at    = now()
    where provider = p_provider;
-
-  if not found then
-    raise exception 'apply_oauth_connection: no integrations row for %', p_provider;
-  end if;
 end;
 $$;
 

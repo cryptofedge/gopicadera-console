@@ -3,7 +3,8 @@
 --
 -- Paste into the Supabase SQL editor. Every row of the first result should say
 -- "ok". The second result shows each ad connection's state -- never a token.
--- Run after ads_oauth.sql, security_hardening.sql and ads_sync.sql (see SETUP.md).
+-- Run after ads_oauth.sql, security_hardening.sql, ads_sync.sql and
+-- ads_accounts.sql (see SETUP.md).
 -- The worker's schedule (ads_schedule.sql) is checked at the end of ADS_WORKER.md.
 -- ============================================================================
 
@@ -64,6 +65,34 @@ checks(item, passed) as (
          case when exists (select 1 from pg_proc where proname = 'claim_campaign_jobs')
               then not has_function_privilege('authenticated', 'claim_campaign_jobs(int)', 'EXECUTE')
               else false end
+  -- ads_accounts.sql: the owner's own apps, and the ad account she chose
+  union all
+  select 'ads_apps table exists',                     to_regclass('public.ads_apps') is not null
+  union all
+  select 'browser cannot read ads_apps.app_secret',
+         case when to_regclass('public.ads_apps') is not null
+              then not has_column_privilege('authenticated', 'public.ads_apps', 'app_secret', 'SELECT')
+              else false end
+  union all
+  select 'owners can save an ad app (set_ads_app), visitors cannot',
+         case when to_regprocedure('set_ads_app(integration_provider,text,text,text)') is not null
+              then has_function_privilege('authenticated', 'set_ads_app(integration_provider,text,text,text)', 'EXECUTE')
+               and not has_function_privilege('anon', 'set_ads_app(integration_provider,text,text,text)', 'EXECUTE')
+              else false end
+  union all
+  select 'owners can choose the ad account (choose_ads_account), visitors cannot',
+         case when to_regprocedure('choose_ads_account(integration_provider,text,text)') is not null
+              then has_function_privilege('authenticated', 'choose_ads_account(integration_provider,text,text)', 'EXECUTE')
+               and not has_function_privilege('anon', 'choose_ads_account(integration_provider,text,text)', 'EXECUTE')
+              else false end
+  union all
+  select 'reconnecting keeps only an account an owner chose',
+         exists (select 1 from pg_proc where proname = 'apply_oauth_connection' and prosrc like '%chosen_at%')
+  union all
+  select 'no connected ad account in use that nobody chose',
+         not exists (select 1 from integrations
+                      where kind = 'ads' and status <> 'disconnected' and store_id is not null
+                        and coalesce(details ->> 'chosen_at', '') = '')
 )
 select item, case when passed then 'ok' else 'MISSING' end as result
   from checks;
@@ -71,8 +100,10 @@ select item, case when passed then 'ok' else 'MISSING' end as result
 select provider,
        status,
        has_secret                              as has_token,
-       store_id is not null                    as has_ad_account,
+       jsonb_array_length(coalesce(details -> 'ad_accounts', '[]'::jsonb)) as ad_accounts,
+       store_id                                as chosen_account,
        jsonb_array_length(coalesce(details -> 'pages', '[]'::jsonb)) as pages,
+       details ->> 'page_id'                   as chosen_page,
        details ->> 'token_expires_at'          as token_expires_at,
        last_error
   from integrations

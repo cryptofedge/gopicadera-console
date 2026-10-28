@@ -105,11 +105,13 @@ await db.exec(sql("ads_oauth.sql"));
 await db.exec(sql("security_hardening.sql"));
 await db.exec(sql("ads_sync.sql"));
 await db.exec(sql("ads_create.sql"));
-// All four are documented as safe to run more than once.
+await db.exec(sql("ads_accounts.sql"));
+// All five are documented as safe to run more than once.
 await db.exec(sql("ads_oauth.sql"));
 await db.exec(sql("security_hardening.sql"));
 await db.exec(sql("ads_sync.sql"));
 await db.exec(sql("ads_create.sql"));
+await db.exec(sql("ads_accounts.sql"));
 
 await db.exec(`
   insert into auth.users values ('${OWNER}', 'o@x'), ('${STAFF}', 's@x'), ('${STRANGER}', 'x@x'), ('${DEACT}', 'd@x');
@@ -244,6 +246,8 @@ const metaDetails = { pages: [{ id: "page-1", name: "Go Picadera", instagram: { 
 await expectOk("service_role connects Meta with its Page, Instagram and expiry", "service_role", null,
   `select apply_oauth_connection(p_provider => 'meta_ads', p_access_token => 'meta-tok', p_account_id => '111,222', p_details => $1::jsonb)`,
   [JSON.stringify(metaDetails)]);
+check("  ...and chooses no ad account: store_id stays empty until an owner picks one",
+  (await row(`select store_id from integrations where provider = 'meta_ads'`)).store_id === null);
 const page = await expectOk("owner runs the Canales page query, details included", "authenticated", OWNER,
   `select provider, kind, status, store_id, client_id, has_secret, details, last_order_at, last_error, auto_accept from integrations order by provider`);
 check("  ...and sees every row", page?.rows.length === 11, page?.rows.length);
@@ -378,15 +382,141 @@ await expectOk("owner saves a draft with everything a launch needs", "authentica
    values ('google_ads', 'Busqueda', 'h', 'b', 10, 'https://gopicadera.com', null, 3,
            '{"headlines":["a","b","c"],"descriptions":["d","e"],"keywords":["k"]}', now(), now() + interval '7 days')`);
 
-// ---- 6. the readiness query Fellito pastes in the SQL editor -----------------------------------------
+// ---- 6. the owner's own developer apps (ads_accounts.sql) --------------------------------------------
+console.log("\nad apps (ads_accounts.sql)");
+const appRow = async (p) => row(`select app_id, app_secret, login_config_id, has_secret, updated_by from ads_apps where provider = '${p}'`);
+await expectOk("owner saves the Meta app (id, secret, configuration)", "authenticated", OWNER,
+  `select set_ads_app('meta_ads', ' 1234567890 ', 'meta-app-secret', '555')`);
+let app = await appRow("meta_ads");
+check("  ...id trimmed, secret stored, configuration kept, and who saved it",
+  app.app_id === "1234567890" && app.app_secret === "meta-app-secret" && app.login_config_id === "555" && app.has_secret === true && app.updated_by === OWNER, JSON.stringify(app));
+await expectErr("staff cannot save an app", "authenticated", STAFF, `select set_ads_app('meta_ads', '1', 'x')`);
+await expectErr("a visitor cannot save an app", "anon", null, `select set_ads_app('meta_ads', '1', 'x')`);
+await expectErr("the browser cannot write ads_apps directly", "authenticated", OWNER, `update ads_apps set app_id = '9' where provider = 'meta_ads'`);
+check("  ...the app is unchanged", (await appRow("meta_ads")).app_id === "1234567890");
+await expectErr("owner cannot read app_secret", "authenticated", OWNER, `select app_secret from ads_apps`);
+await expectErr("owner cannot select * from ads_apps", "authenticated", OWNER, `select * from ads_apps`);
+const apps = await expectOk("owner reads what Canales shows", "authenticated", OWNER,
+  `select provider, app_id, login_config_id, has_secret, updated_at from ads_apps order by provider`);
+check("  ...three apps, Meta's saved with a secret and no secret in sight",
+  apps?.rows.length === 3 && apps.rows.find((r) => r.provider === "meta_ads")?.has_secret === true && !JSON.stringify(apps.rows).includes("meta-app-secret"));
+const staffApps = await expectOk("staff reads ads_apps without an error", "authenticated", STAFF, `select provider, has_secret from ads_apps`);
+check("  ...and gets no rows", staffApps?.rows.length === 0);
+await expectErr("a visitor cannot read ads_apps", "anon", null, `select provider from ads_apps`);
+await expectOk("owner clears the configuration id and leaves the secret blank", "authenticated", OWNER,
+  `select set_ads_app('meta_ads', '1234567890', '', null)`);
+app = await appRow("meta_ads");
+check("  ...the stored secret is kept", app.app_secret === "meta-app-secret" && app.login_config_id === null, JSON.stringify(app));
+await expectOk("owner saves again with no secret argument at all", "authenticated", OWNER, `select set_ads_app('meta_ads', '1234567890')`);
+check("  ...still kept", (await appRow("meta_ads")).app_secret === "meta-app-secret");
+await expectErr("a Meta app id with letters is refused", "authenticated", OWNER, `select set_ads_app('meta_ads', 'abc123', 'x')`);
+await expectErr("a TikTok app id with letters is refused", "authenticated", OWNER, `select set_ads_app('tiktok_ads', '72a9', 'x')`);
+await expectErr("a Google client id not ending in .apps.googleusercontent.com is refused", "authenticated", OWNER,
+  `select set_ads_app('google_ads', '1234-abc', 'x')`);
+await expectErr("a blank app id is refused", "authenticated", OWNER, `select set_ads_app('tiktok_ads', '   ', 'x')`);
+await expectErr("a Meta configuration id with letters is refused", "authenticated", OWNER, `select set_ads_app('meta_ads', '1234567890', null, 'cfg-1')`);
+await expectErr("a delivery channel has no ad app", "authenticated", OWNER, `select set_ads_app('ubereats', '1', 'x')`);
+check("  ...none of the refused saves changed anything",
+  (await appRow("meta_ads")).app_id === "1234567890" && (await appRow("tiktok_ads")).app_id === null && (await appRow("google_ads")).app_id === null);
+await expectOk("owner saves the Google client", "authenticated", OWNER,
+  `select set_ads_app('google_ads', ' 1234-abc.apps.googleusercontent.com ', 'g-secret', '999')`);
+app = await appRow("google_ads");
+check("  ...configuration id is Meta-only", app.app_id === "1234-abc.apps.googleusercontent.com" && app.has_secret && app.login_config_id === null, JSON.stringify(app));
+await db.exec(`update integrations set status = 'connected', client_secret = 'tok-old-app', refresh_token = null, store_id = '111',
+                 details = '{"chosen_at":"2026-10-28T12:00:00Z","pages":[{"id":"p1"}]}' where provider = 'meta_ads'`);
+await expectOk("owner saves the same Meta app id again", "authenticated", OWNER, `select set_ads_app('meta_ads', '1234567890', 'rotated-secret')`);
+let mi = await row(`select status::text, has_secret, store_id, details from integrations where provider = 'meta_ads'`);
+check("  ...the connection is untouched", mi.status === "connected" && mi.has_secret === true && mi.store_id === "111", JSON.stringify(mi));
+await expectOk("owner switches to a different Meta app", "authenticated", OWNER, `select set_ads_app('meta_ads', '2222222222', 'other-secret')`);
+mi = await row(`select status::text, has_secret, store_id, details from integrations where provider = 'meta_ads'`);
+check("  ...Meta is disconnected: the old app's token, chosen account and details are gone",
+  mi.status === "disconnected" && mi.has_secret === false && mi.store_id === null && JSON.stringify(mi.details) === "{}", JSON.stringify(mi));
+
+// ---- 7. choosing Go Picadera's ad account and Page (ads_accounts.sql) ---------------------------------
+console.log("\nchoosing the ad account (ads_accounts.sql)");
+const META_LISTS = {
+  ad_accounts: [{ id: "111", name: "Go Picadera" }, { id: "222", name: "Cuenta de Fellito" }, { id: "333", name: null }],
+  pages: [{ id: "page-1", name: "Go Picadera", instagram: { id: "ig-1", username: "gopicadera" } }, { id: "page-2", name: "Otra", instagram: null }],
+  token_expires_at: "2026-12-27T12:00:00.000Z",
+};
+const connectMeta = (label, ids, details) => expectOk(label, "service_role", null,
+  `select apply_oauth_connection(p_provider => 'meta_ads', p_access_token => 'meta-tok-2', p_account_id => $1, p_details => $2::jsonb)`,
+  [ids, JSON.stringify(details)]);
+const metaRow = () => row(`select store_id, details, updated_by from integrations where provider = 'meta_ads'`);
+await connectMeta("Meta connects with a login that reaches one account and one Page",
+  "111", { ad_accounts: [META_LISTS.ad_accounts[0]], pages: [META_LISTS.pages[0]] });
+let mc = await metaRow();
+check("  ...even then nothing is chosen for the owner", mc.store_id === null && !mc.details.page_id && !mc.details.chosen_at, JSON.stringify(mc));
+await connectMeta("Meta connects with three accounts and two Pages", "111,222,333", META_LISTS);
+mc = await metaRow();
+check("  ...the accounts and Pages are recorded with their names, none chosen",
+  mc.store_id === null && mc.details.ad_accounts.length === 3 && mc.details.ad_accounts[0].name === "Go Picadera" && mc.details.pages.length === 2, JSON.stringify(mc));
+await expectOk("the worker imports a campaign from another account the login reaches", "service_role", null,
+  `select upsert_platform_campaigns('meta_ads', $1::jsonb)`, [JSON.stringify([{ campaign_id: "c22", account_id: "222", name: "Otro negocio", status: "active" }])]);
+await expectOk("  ...and a TikTok one", "service_role", null,
+  `select upsert_platform_campaigns('tiktok_ads', $1::jsonb)`, [JSON.stringify([{ campaign_id: "t1", account_id: "7001", name: "TikTok", status: "active" }])]);
+await db.exec(`insert into campaigns (id, provider, name, status, account_id, origin)
+               values ('dddddddd-0000-0000-0000-000000000022', 'meta_ads', 'Hecha aqui, en la 222', 'paused', '222', 'console')`);
+const hasCampaign = async (where) => Number((await row(`select count(*) n from campaigns where ${where}`)).n) === 1;
+const jobCount = async () => Number((await row(`select count(*) n from campaign_jobs`)).n);
+await expectErr("staff cannot choose the account", "authenticated", STAFF, `select choose_ads_account('meta_ads', '111', 'page-1')`);
+await expectErr("a visitor cannot choose the account", "anon", null, `select choose_ads_account('meta_ads', '111', 'page-1')`);
+await expectErr("an account this connection does not see is refused", "authenticated", OWNER, `select choose_ads_account('meta_ads', '999', 'page-1')`);
+await expectErr("Meta without a Page is refused", "authenticated", OWNER, `select choose_ads_account('meta_ads', '111')`);
+await expectErr("Meta with a Page this connection does not see is refused", "authenticated", OWNER, `select choose_ads_account('meta_ads', '111', 'page-9')`);
+await expectErr("a disconnected platform has nothing to choose", "authenticated", OWNER, `select choose_ads_account('tiktok_ads', '7001')`);
+await expectErr("a delivery channel has no ad account", "authenticated", OWNER, `select choose_ads_account('ubereats', 's1')`);
+check("  ...nothing chosen and nothing deleted by the refused calls", (await metaRow()).store_id === null && await hasCampaign(`platform_ids->>'campaign' = 'c22'`));
+const jobsBefore = await jobCount();
+await expectOk("owner chooses Go Picadera's account and Page", "authenticated", OWNER, `select choose_ads_account('meta_ads', '111', 'page-1')`);
+mc = await metaRow();
+check("  ...store_id is that one account; the Page, the moment and who chose are recorded",
+  mc.store_id === "111" && mc.details.page_id === "page-1" && !!mc.details.chosen_at && mc.details.ad_accounts.length === 3 && mc.updated_by === OWNER, JSON.stringify(mc));
+check("  ...the import from the other account is gone", !(await hasCampaign(`platform_ids->>'campaign' = 'c22'`)));
+check("  ...imports from the chosen account stay", await hasCampaign(`platform_ids->>'campaign' = 'c9'`));
+check("  ...campaigns made here stay, even one on another account",
+  await hasCampaign(`id = 'dddddddd-0000-0000-0000-000000000022'`) && await hasCampaign(`id = '${LIVE}'`) && await hasCampaign(`id = '${DRAFT}'`));
+check("  ...another platform's imports are untouched", await hasCampaign(`provider = 'tiktok_ads' and platform_ids->>'campaign' = 't1'`));
+check("  ...and no job was queued", (await jobCount()) === jobsBefore);
+const chosenAt = mc.details.chosen_at;
+await connectMeta("Meta reconnects with the same login", "111,222,333", META_LISTS);
+mc = await metaRow();
+check("  ...keeps the chosen account and Page", mc.store_id === "111" && mc.details.page_id === "page-1" && mc.details.chosen_at === chosenAt, JSON.stringify(mc));
+await connectMeta("Meta reconnects with a login that still sees the Page but not the account",
+  "222,333", { ...META_LISTS, ad_accounts: META_LISTS.ad_accounts.slice(1) });
+mc = await metaRow();
+check("  ...drops the account, keeps the Page", mc.store_id === null && !mc.details.chosen_at && mc.details.page_id === "page-1", JSON.stringify(mc));
+await connectMeta("  ...and once the account is reachable again", "111,222,333", META_LISTS);
+check("  ...it is not chosen again by itself", (await metaRow()).store_id === null);
+await expectOk("owner chooses again", "authenticated", OWNER, `select choose_ads_account('meta_ads', '111', 'page-1')`);
+await connectMeta("Meta reconnects with a login that still sees the account but not the Page",
+  "111,222", { ...META_LISTS, pages: [META_LISTS.pages[1]] });
+mc = await metaRow();
+check("  ...keeps the account, drops the Page", mc.store_id === "111" && !!mc.details.chosen_at && !("page_id" in mc.details), JSON.stringify(mc));
+await expectOk("owner disconnects Meta, then it is connected again", "authenticated", OWNER,
+  `update integrations set status = 'disconnected', client_secret = null where provider = 'meta_ads'`);
+await connectMeta("  ...with the same login", "111,222,333", META_LISTS);
+check("  ...a disconnect forgets the choice, like the Page and the token", (await metaRow()).store_id === null);
+await db.exec(`update integrations set status = 'connected', client_secret = 'g-refresh',
+                 details = '{"ad_accounts":[{"id":"1234567890","name":"Go Picadera"}]}' where provider = 'google_ads'`);
+await expectOk("Google needs no Page", "authenticated", OWNER, `select choose_ads_account('google_ads', '1234567890')`);
+const gc = await row(`select store_id, details from integrations where provider = 'google_ads'`);
+check("  ...account chosen, no page_id", gc.store_id === "1234567890" && !("page_id" in gc.details), JSON.stringify(gc));
+await db.exec(`update integrations set status = 'connected', client_secret = 'tt', store_id = '7001,7002', details = '{}' where provider = 'tiktok_ads'`);
+await db.exec(sql("ads_accounts.sql"));
+check("re-running ads_accounts.sql clears an account list nobody chose (what the old callback stored)",
+  (await row(`select store_id from integrations where provider = 'tiktok_ads'`)).store_id === null);
+check("  ...and keeps an account an owner chose", (await row(`select store_id from integrations where provider = 'google_ads'`)).store_id === "1234567890");
+
+// ---- 8. the readiness query Fellito pastes in the SQL editor -----------------------------------------
 console.log("\nreadiness query");
 const [readiness, status] = await db.exec(sql("check_readiness.sql"));
 const missing = readiness.rows.filter((r) => r.result !== "ok").map((r) => r.item);
-check(`check_readiness.sql: all ${readiness.rows.length} items ok`, readiness.rows.length >= 17 && missing.length === 0, JSON.stringify(missing));
+check(`check_readiness.sql: all ${readiness.rows.length} items ok`, readiness.rows.length >= 23 && missing.length === 0, JSON.stringify(missing));
 check("  ...and its status listing shows the three ad rows without any token",
   status.rows.length === 3 && !JSON.stringify(status.rows).includes("meta-tok") && !JSON.stringify(status.rows).includes("acc-1"));
 
-// ---- 7. self-check -----------------------------------------------------------------------------------
+// ---- 9. self-check -----------------------------------------------------------------------------------
 console.log("\nself-check");
 await db.exec(`create function noop() returns trigger language plpgsql as $$ begin return new; end $$;
                create trigger aa_early before update on orders for each row execute function noop();`);
