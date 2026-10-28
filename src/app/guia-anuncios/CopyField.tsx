@@ -17,7 +17,7 @@ export default function CopyField({ label, value }: { label: string; value: stri
   }
 
   return (
-    <div style={{ margin: "0.5rem 0 0.75rem", border: "1px solid var(--line)", borderRadius: 8, padding: "0.5rem 0.75rem" }}>
+    <div className="copy" style={{ margin: "0.5rem 0 0.75rem", border: "1px solid var(--line)", borderRadius: 8, padding: "0.5rem 0.75rem" }}>
       <div style={{ fontSize: "0.8rem", color: "var(--muted)" }}>{label}</div>
       <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
         <code style={{ wordBreak: "break-all", flex: "1 1 14rem", userSelect: "all" }}>{value}</code>
