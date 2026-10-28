@@ -140,6 +140,97 @@ const field = {
   color: "var(--text)",
 };
 
+type AdsTargetingValue = {
+  lat?: number;
+  lng?: number;
+  radius_mi?: number;
+  destination_url?: string;
+  tiktok_location_ids?: (string | number)[];
+};
+
+/**
+ * Where ads are aimed and where they lead. The ads worker reads this when it launches a campaign:
+ * Meta and Google draw a circle around the restaurant, TikTok needs its own location ids (it has no
+ * radius targeting). Seeded from the stored value once, by the parent's key, rather than in an effect.
+ */
+function AdsTargeting({ initial, onSaved }: { initial: AdsTargetingValue; onSaved: () => void }) {
+  const [lat, setLat] = useState(String(initial.lat ?? ""));
+  const [lng, setLng] = useState(String(initial.lng ?? ""));
+  const [radius, setRadius] = useState(String(initial.radius_mi ?? 3));
+  const [url, setUrl] = useState(initial.destination_url ?? "https://gopicadera.com");
+  const [tiktok, setTiktok] = useState((initial.tiktok_location_ids ?? []).join(", "));
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    const value: AdsTargetingValue = {
+      lat: Number(lat),
+      lng: Number(lng),
+      radius_mi: Number(radius),
+      destination_url: url.trim(),
+      tiktok_location_ids: tiktok.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean),
+    };
+    if (!Number.isFinite(value.lat) || !Number.isFinite(value.lng) || Math.abs(value.lat!) > 90 || Math.abs(value.lng!) > 180) {
+      setMsg("La ubicación no es válida.");
+      return;
+    }
+    if (!(value.radius_mi! >= 0.63 && value.radius_mi! <= 50)) {
+      setMsg("El radio va de 0.63 a 50 millas.");
+      return;
+    }
+    setSaving(true);
+    setMsg("");
+    const { error: err } = await browserClient().from("settings").upsert([{ key: "ads_targeting", value }]);
+    setSaving(false);
+    setMsg(err ? `No se pudo guardar: ${err.message}` : "Guardado.");
+    if (!err) onSaved();
+  }
+
+  const small = "px-3 py-2 rounded-lg border outline-none nums w-36";
+  return (
+    <form onSubmit={save} className="rounded-xl border p-4 max-w-2xl mb-5"
+          style={{ background: "var(--surface)", borderColor: "var(--line)" }}>
+      <h2 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: "var(--muted)" }}>Anuncios</h2>
+
+      <div className="flex gap-3 flex-wrap mb-2">
+        <label className="text-xs" style={{ color: "var(--faint)" }}>Latitud
+          <input value={lat} onChange={(e) => setLat(e.target.value)} className={`${small} block mt-1`} style={field} />
+        </label>
+        <label className="text-xs" style={{ color: "var(--faint)" }}>Longitud
+          <input value={lng} onChange={(e) => setLng(e.target.value)} className={`${small} block mt-1`} style={field} />
+        </label>
+        <label className="text-xs" style={{ color: "var(--faint)" }}>Radio (millas)
+          <input type="number" min={0.63} max={50} step="0.5" value={radius} onChange={(e) => setRadius(e.target.value)}
+                 className={`${small} block mt-1`} style={field} />
+        </label>
+      </div>
+      <p className="text-xs mb-4" style={{ color: "var(--faint)" }}>
+        Meta y Google muestran los anuncios a quien esté dentro de este círculo alrededor del restaurante.
+      </p>
+
+      <label className="text-xs block mb-4" style={{ color: "var(--faint)" }}>A dónde llevan los anuncios
+        <input value={url} onChange={(e) => setUrl(e.target.value)} className="w-full px-3 py-2 rounded-lg border outline-none mt-1" style={field} />
+      </label>
+
+      <label className="text-xs block mb-1" style={{ color: "var(--faint)" }}>Zonas de TikTok (IDs, separados por coma)
+        <input value={tiktok} onChange={(e) => setTiktok(e.target.value)} className="w-full px-3 py-2 rounded-lg border outline-none nums mt-1" style={field} />
+      </label>
+      <p className="text-xs mb-4" style={{ color: "var(--faint)" }}>
+        TikTok no usa radio: apunta por zonas con su propio número. Fellito los pone una vez desde TikTok Ads Manager.
+      </p>
+
+      <button disabled={saving} className="px-5 py-2 rounded-full font-bold disabled:opacity-50"
+              style={{ background: "var(--surface-3)", color: "var(--text)" }}>
+        {saving ? "Guardando…" : "Guardar anuncios"}
+      </button>
+      {msg && (
+        <span className="ml-3 text-sm" style={{ color: msg === "Guardado." ? "var(--green)" : "var(--red)" }}>{msg}</span>
+      )}
+    </form>
+  );
+}
+
 export default function SettingsPage() {
   const { data, loading, error, reload } = useQuery<Setting[]>(
     (sb) => sb.from("settings").select("key, value") as never,
@@ -185,11 +276,15 @@ export default function SettingsPage() {
   if (loading) return <p style={{ color: "var(--faint)" }}>Cargando ajustes…</p>;
   if (error) return <p style={{ color: "var(--red)" }}>{error}</p>;
 
+  const adsTargeting = ((data ?? []).find((r) => r.key === "ads_targeting")?.value ?? {}) as AdsTargetingValue;
+
   return (
     <>
       <h1 className="text-xl font-black mb-3">Ajustes</h1>
 
       <RobotBalance />
+
+      <AdsTargeting key={JSON.stringify(adsTargeting)} initial={adsTargeting} onSaved={reload} />
 
       <form onSubmit={save}
             className="rounded-xl border p-4 max-w-2xl"

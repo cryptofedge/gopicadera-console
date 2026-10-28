@@ -255,3 +255,235 @@ export function googleError(body: unknown, status: number): AdsError | null {
 export function googleTokenRefreshBody(clientId: string, clientSecret: string, refreshToken: string): string {
   return new URLSearchParams({ grant_type: "refresh_token", refresh_token: refreshToken, client_id: clientId, client_secret: clientSecret }).toString();
 }
+
+// ======================================================================================== create ===
+// What a launch needs, assembled by the worker from the campaign row and the ads_targeting setting.
+export interface LaunchSpec {
+  name: string;
+  headline: string;
+  body: string;
+  dailyBudget: number;      // dollars
+  startsAt: string | null;  // ISO; null = now
+  endsAt: string | null;    // ISO; null = no end
+  url: string;
+  mediaUrl: string | null;  // image (Meta) or video (TikTok), public URL in the "ads" bucket
+  lat: number;
+  lng: number;
+  radiusMi: number;
+  google?: { headlines: string[]; descriptions: string[]; keywords: string[] };
+  tiktokLocationIds?: string[];
+}
+
+// The smallest daily budget each platform accepts for this kind of ad.
+export const MIN_DAILY_BUDGET: Record<Provider, number> = { meta_ads: 1, tiktok_ads: 20, google_ads: 1 };
+export const TIKTOK_AD_TEXT_MAX = 100;
+
+export function tiktokAdText(spec: Pick<LaunchSpec, "headline" | "body">): string {
+  // TikTok ads have no headline field; the account name shows instead, so the headline leads the text.
+  return [spec.headline.trim(), spec.body.trim()].filter(Boolean).join(". ");
+}
+
+/** Everything the owner can fix before anything is sent to a platform. Spanish, shown on the campaign. */
+export function validateLaunch(provider: Provider, spec: LaunchSpec, nowMs: number): string | null {
+  const name = { meta_ads: "Meta", tiktok_ads: "TikTok", google_ads: "Google" }[provider];
+  if (!spec.name.trim()) return "Ponle un nombre a la campaña.";
+  if (!/^https?:\/\/\S+\.\S+/.test(spec.url)) return "El enlace de destino no es una dirección web válida.";
+  if (!(spec.dailyBudget >= MIN_DAILY_BUDGET[provider])) {
+    return `${name} pide un presupuesto diario de al menos $${MIN_DAILY_BUDGET[provider]}.`;
+  }
+  if (!Number.isFinite(spec.lat) || !Number.isFinite(spec.lng)) return "Falta la ubicación del restaurante (Ajustes → Anuncios).";
+  const end = spec.endsAt ? Date.parse(spec.endsAt) : null;
+  const start = Math.max(spec.startsAt ? Date.parse(spec.startsAt) : nowMs, nowMs);
+  if (end !== null && end <= nowMs) return "La fecha de fin ya pasó.";
+  if (end !== null && end - start < 86400_000) return "Con presupuesto diario, la campaña tiene que durar más de un día.";
+
+  if (provider === "meta_ads") {
+    if (!spec.mediaUrl) return "Meta necesita una imagen para el anuncio.";
+    if (!spec.headline.trim() || !spec.body.trim()) return "Escribe el titular y el texto del anuncio.";
+    if (spec.radiusMi < 0.63 || spec.radiusMi > 50) return "Para Meta el radio tiene que estar entre 0.63 y 50 millas.";
+  }
+  if (provider === "tiktok_ads") {
+    if (!spec.mediaUrl) return "TikTok necesita un video para el anuncio.";
+    const text = tiktokAdText(spec);
+    if (!text) return "Escribe el texto del anuncio.";
+    if (text.length > TIKTOK_AD_TEXT_MAX) return `Para TikTok, titular y texto juntos deben tener ${TIKTOK_AD_TEXT_MAX} caracteres o menos (ahora ${text.length}).`;
+    if (!spec.tiktokLocationIds?.length) return "Faltan las zonas de TikTok (Ajustes → Anuncios).";
+  }
+  if (provider === "google_ads") {
+    const g = spec.google;
+    const heads = (g?.headlines || []).map((h) => h.trim()).filter(Boolean);
+    const descs = (g?.descriptions || []).map((d) => d.trim()).filter(Boolean);
+    const kws = (g?.keywords || []).map((k) => k.trim()).filter(Boolean);
+    if (heads.length < 3 || heads.length > 15) return "Google pide entre 3 y 15 titulares.";
+    if (heads.some((h) => h.length > 30)) return "Cada titular de Google puede tener 30 caracteres como máximo.";
+    if (descs.length < 2 || descs.length > 4) return "Google pide entre 2 y 4 descripciones.";
+    if (descs.some((d) => d.length > 90)) return "Cada descripción de Google puede tener 90 caracteres como máximo.";
+    if (kws.length < 1) return "Google necesita al menos una palabra clave.";
+    if (kws.some((k) => k.length > 80)) return "Cada palabra clave puede tener 80 caracteres como máximo.";
+  }
+  return null;
+}
+
+// ------------------------------------------------------------------------------- Meta: create ---
+export function metaObjectStorySpec(spec: LaunchSpec, pageId: string, instagramId: string | null, imageHash: string) {
+  return {
+    page_id: pageId,
+    // Names the Instagram account so the same ad runs on Instagram; without it Meta uses the Page.
+    ...(instagramId ? { instagram_user_id: instagramId } : {}),
+    link_data: {
+      image_hash: imageHash,
+      link: spec.url,
+      message: spec.body,
+      name: spec.headline,
+      call_to_action: { type: "LEARN_MORE", value: { link: spec.url } },
+    },
+  };
+}
+
+export function metaTargeting(spec: LaunchSpec) {
+  return {
+    geo_locations: {
+      custom_locations: [{ latitude: spec.lat, longitude: spec.lng, radius: spec.radiusMi, distance_unit: "mile" }],
+    },
+    age_min: 18,
+    // Must be stated explicitly since v23; 0 keeps the radius as drawn instead of letting Meta widen it.
+    targeting_automation: { advantage_audience: 0 },
+  };
+}
+
+/** Form fields for POST /act_{id}/adsets. Objects travel as JSON strings, which Graph accepts. */
+export function metaAdsetParams(spec: LaunchSpec, campaignId: string, nowMs: number): Record<string, string> {
+  const p: Record<string, string> = {
+    name: `${spec.name} · conjunto`,
+    campaign_id: campaignId,
+    daily_budget: String(Math.round(spec.dailyBudget * 100)),
+    billing_event: "IMPRESSIONS",
+    optimization_goal: "LINK_CLICKS",
+    bid_strategy: "LOWEST_COST_WITHOUT_CAP",
+    destination_type: "WEBSITE",
+    targeting: JSON.stringify(metaTargeting(spec)),
+    status: "ACTIVE", // runs only once its campaign is switched on, which is the last step
+  };
+  if (spec.startsAt && Date.parse(spec.startsAt) > nowMs) p.start_time = new Date(spec.startsAt).toISOString();
+  if (spec.endsAt) p.end_time = new Date(spec.endsAt).toISOString();
+  return p;
+}
+
+// ----------------------------------------------------------------------------- TikTok: create ---
+/** TikTok wants "YYYY-MM-DD HH:MM:SS" in UTC. */
+export function tiktokTime(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 19).replace("T", " ");
+}
+
+export function tiktokAdgroupBody(advertiserId: string, campaignId: string, spec: LaunchSpec, nowMs: number) {
+  // TikTok refuses a start time in the past; a few minutes ahead means "now".
+  const start = Math.max(spec.startsAt ? Date.parse(spec.startsAt) : 0, nowMs + 10 * 60_000);
+  return {
+    advertiser_id: advertiserId,
+    campaign_id: campaignId,
+    adgroup_name: `${spec.name} · grupo`,
+    promotion_type: "WEBSITE",
+    placement_type: "PLACEMENT_TYPE_NORMAL",
+    placements: ["PLACEMENT_TIKTOK"],
+    location_ids: spec.tiktokLocationIds || [],
+    budget_mode: "BUDGET_MODE_DAY",
+    budget: Math.round(spec.dailyBudget * 100) / 100, // TikTok keeps dollars
+    schedule_type: spec.endsAt ? "SCHEDULE_START_END" : "SCHEDULE_FROM_NOW",
+    schedule_start_time: tiktokTime(start),
+    ...(spec.endsAt ? { schedule_end_time: tiktokTime(Date.parse(spec.endsAt)) } : {}),
+    optimization_goal: "CLICK",
+    billing_event: "CPC",
+    bid_type: "BID_TYPE_NO_BID",
+    pacing: "PACING_MODE_SMOOTH",
+    operation_status: "ENABLE",
+  };
+}
+
+export interface TiktokIdentity { identity_id?: string; identity_type?: string; identity_authorized_bc_id?: string; display_name?: string }
+
+/** Since January 2026 new campaigns must run as a real TikTok account; Custom Identity is gone. */
+export function pickTiktokIdentity(list: TiktokIdentity[]): TiktokIdentity | null {
+  return list.find((i) => i.identity_type === "TT_USER" && i.identity_id)
+    || list.find((i) => i.identity_type === "BC_AUTH_TT" && i.identity_id)
+    || null;
+}
+
+export function tiktokAdBody(advertiserId: string, adgroupId: string, spec: LaunchSpec, videoId: string, imageId: string, identity: TiktokIdentity) {
+  return {
+    advertiser_id: advertiserId,
+    adgroup_id: adgroupId,
+    creatives: [{
+      ad_name: spec.name,
+      ad_format: "SINGLE_VIDEO",
+      video_id: videoId,
+      image_ids: [imageId],
+      identity_type: identity.identity_type,
+      identity_id: identity.identity_id,
+      ...(identity.identity_type === "BC_AUTH_TT" && identity.identity_authorized_bc_id
+        ? { identity_authorized_bc_id: identity.identity_authorized_bc_id } : {}),
+      ad_text: tiktokAdText(spec),
+      call_to_action: "LEARN_MORE",
+      landing_page_url: spec.url,
+    }],
+  };
+}
+
+// ----------------------------------------------------------------------------- Google: create ---
+/** "yyyy-MM-dd HH:mm:ss" (the format that replaced start_date/end_date in v23), day precision. */
+export function googleDateTime(iso: string, endOfDay: boolean): string {
+  return `${iso.slice(0, 10)} ${endOfDay ? "23:59:59" : "00:00:00"}`;
+}
+
+/**
+ * One atomic googleAds:mutate: budget, Search campaign (paused), radius around the restaurant, ad group,
+ * keywords and a responsive search ad. Temporary negative ids tie the pieces together within the request.
+ */
+export function googleCreateOperations(customerId: string, spec: LaunchSpec, todayIso: string, uniq: string): Record<string, unknown>[] {
+  const c = `customers/${customerId}`;
+  const budget = `${c}/campaignBudgets/-1`;
+  const campaign = `${c}/campaigns/-2`;
+  const adGroup = `${c}/adGroups/-3`;
+  const g = spec.google!;
+  const startIso = spec.startsAt && spec.startsAt.slice(0, 10) > todayIso ? spec.startsAt : todayIso;
+  return [
+    { campaignBudgetOperation: { create: {
+      resourceName: budget, name: `${spec.name} · presupuesto ${uniq}`,
+      amountMicros: String(Math.round(spec.dailyBudget * 1e6)), deliveryMethod: "STANDARD", explicitlyShared: false,
+    } } },
+    { campaignOperation: { create: {
+      resourceName: campaign, name: `${spec.name} ${uniq}`, status: "PAUSED",
+      advertisingChannelType: "SEARCH", campaignBudget: budget,
+      targetSpend: {}, // Maximize Clicks
+      networkSettings: { targetGoogleSearch: true, targetSearchNetwork: false, targetContentNetwork: false, targetPartnerSearchNetwork: false },
+      geoTargetTypeSetting: { positiveGeoTargetType: "PRESENCE" },
+      containsEuPoliticalAdvertising: "DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING",
+      startDateTime: googleDateTime(startIso, false),
+      ...(spec.endsAt ? { endDateTime: googleDateTime(spec.endsAt, true) } : {}),
+    } } },
+    { campaignCriterionOperation: { create: {
+      campaign,
+      proximity: {
+        geoPoint: { latitudeInMicroDegrees: Math.round(spec.lat * 1e6), longitudeInMicroDegrees: Math.round(spec.lng * 1e6) },
+        radius: spec.radiusMi, radiusUnits: "MILES",
+      },
+    } } },
+    { adGroupOperation: { create: { resourceName: adGroup, name: `${spec.name} · grupo`, campaign, type: "SEARCH_STANDARD", status: "ENABLED" } } },
+    ...g.keywords.map((k) => k.trim()).filter(Boolean).map((text) => ({
+      adGroupCriterionOperation: { create: { adGroup, status: "ENABLED", keyword: { text, matchType: "PHRASE" } } },
+    })),
+    { adGroupAdOperation: { create: { adGroup, status: "ENABLED", ad: {
+      finalUrls: [spec.url],
+      responsiveSearchAd: {
+        headlines: g.headlines.map((t) => t.trim()).filter(Boolean).map((text) => ({ text })),
+        descriptions: g.descriptions.map((t) => t.trim()).filter(Boolean).map((text) => ({ text })),
+      },
+    } } } },
+  ];
+}
+
+/** The real campaign id out of a mutate response ("customers/1/campaigns/123" -> "123"). */
+export function googleCreatedCampaignId(body: unknown): string | null {
+  const results = (body as { mutateOperationResponses?: { campaignResult?: { resourceName?: string } }[] } | null)?.mutateOperationResponses || [];
+  const rn = results.map((r) => r.campaignResult?.resourceName).find(Boolean);
+  return rn ? rn.split("/").pop() || null : null;
+}

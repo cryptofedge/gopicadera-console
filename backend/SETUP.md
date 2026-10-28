@@ -91,10 +91,11 @@ Each file assumes the ones above it. `APPLY_ALL.sql` is exactly the first two.
 9. `security_hardening.sql` — what a browser may write to orders, loyalty codes and integrations.
    Safe to run again.
 10. `ads_sync.sql` — what the ads worker reads and writes (see ADS_WORKER.md).
-11. `ads_schedule.sql` — wakes the ads worker. Needs `pg_cron`, `pg_net` and two Vault secrets, and the
+11. `ads_create.sql` — the `ads` Storage bucket for ad images and videos, and the default targeting.
+12. `ads_schedule.sql` — wakes the ads worker. Needs `pg_cron`, `pg_net` and two Vault secrets, and the
     `ads-worker` function deployed first.
 
-`npm run test:sql` executes steps 1–10 (Postgres in WebAssembly, no account needed). Step 11 uses
+`npm run test:sql` executes steps 1–11 (Postgres in WebAssembly, no account needed). Step 12 uses
 Supabase-only extensions and is checked by hand, as described at the end of ADS_WORKER.md.
 
 ## 5. Before telling the owner the ad connections work

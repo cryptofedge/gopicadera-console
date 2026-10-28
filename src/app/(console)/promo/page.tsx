@@ -8,15 +8,17 @@
  * Starting or stopping one costs money, so that stays with the owner and RLS
  * enforces it.
  *
- * Same connection reality as the delivery platforms: Google Ads, Meta and
- * TikTok all require an approved developer account before their APIs answer.
- * Until then a campaign here is a draft the owner can read, edit and schedule —
- * it just cannot go live on its own.
+ * The console never talks to Meta, TikTok or Google itself. It records what the
+ * owner wants -- a draft, Publicar, Pausar -- and the ads worker (a Supabase
+ * Edge Function, see backend/ADS_WORKER.md) carries it out and writes back
+ * what the platform said. A platform that is not connected in Canales simply
+ * answers with a reason on the campaign.
  */
 import { useEffect, useState } from "react";
 import { browserClient } from "@/lib/supabase-browser";
 import { useSession, isOwner } from "@/lib/session";
 import { useQuery } from "@/lib/useQuery";
+import NewCampaignForm from "./NewCampaignForm";
 
 type Provider = "google_ads" | "meta_ads" | "tiktok_ads";
 type Status = "draft" | "scheduled" | "publishing" | "active" | "paused" | "ended" | "failed";
@@ -99,12 +101,6 @@ function platformLink(c: Campaign): string {
 const POLL_MS = 5000;
 const WATCH_MS = 60_000;
 const POLL_CAP_MS = 3 * 60_000;
-
-const field = {
-  background: "var(--ink)",
-  borderColor: "var(--line)",
-  color: "var(--text)",
-};
 
 export default function PromoPage() {
   const { profile } = useSession();
@@ -190,24 +186,15 @@ export default function PromoPage() {
   }
 
   async function launch(c: Campaign) {
+    // Real money starts moving here, so say how much before it does.
+    const platform = META[c.provider]?.name ?? c.provider;
+    const days = c.ends_at ? Math.max(1, Math.ceil((new Date(c.ends_at).getTime() - new Date(c.starts_at || c.ends_at).getTime()) / 86400_000)) : null;
+    const total = days ? ` (unos ${money(c.daily_budget * days)} en total hasta el ${new Date(c.ends_at!).toLocaleDateString("es-DO", { day: "2-digit", month: "short" })})` : "";
+    const verb = c.external_id ? "Reanudar" : "Publicar";
+    if (!confirm(`${verb} "${c.name}" en ${platform}: hasta ${money(c.daily_budget)} al día${total}. ¿Seguro?`)) return;
     // Resuming something already on the platform goes straight back to active;
     // a first launch has to be created there first.
     await setStatus(c, c.external_id ? "active" : "publishing");
-  }
-
-  async function create(fd: FormData) {
-    setBusy(true);
-    await browserClient().from("campaigns").insert({
-      provider: String(fd.get("provider")),
-      name: String(fd.get("name") ?? "").trim(),
-      headline: String(fd.get("headline") ?? "").trim() || null,
-      body: String(fd.get("body") ?? "").trim() || null,
-      daily_budget: Number(fd.get("daily_budget")) || 0,
-      status: "draft",
-    });
-    setBusy(false);
-    setOpen(false);
-    reload();
   }
 
   if (loading) return <p style={{ color: "var(--faint)" }}>Cargando promociones…</p>;
@@ -254,36 +241,7 @@ export default function PromoPage() {
       )}
 
       {open && owner && (
-        <form
-          action={create}
-          className="rounded-xl border p-4 mb-5 grid gap-3 max-w-2xl"
-          style={{ background: "var(--surface)", borderColor: "var(--line-warm)" }}
-        >
-          <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))" }}>
-            <select name="provider" className="px-3 py-2 rounded-lg border outline-none text-sm" style={field}>
-              {Object.entries(META).map(([k, m]) => (
-                <option key={k} value={k}>{m.name}</option>
-              ))}
-            </select>
-            <input name="name" required placeholder="Nombre interno"
-                   className="px-3 py-2 rounded-lg border outline-none text-sm" style={field} />
-            <input name="daily_budget" type="number" min={0} step="0.01" placeholder="Presupuesto diario"
-                   className="px-3 py-2 rounded-lg border outline-none text-sm nums" style={field} />
-          </div>
-          <input name="headline" placeholder="Titular — ej. Mofongo con pernil, hoy $12"
-                 className="px-3 py-2 rounded-lg border outline-none text-sm" style={field} />
-          <textarea name="body" rows={3} placeholder="Texto del anuncio"
-                    className="px-3 py-2 rounded-lg border outline-none text-sm" style={field} />
-          <p className="text-xs" style={{ color: "var(--faint)" }}>
-            Se guarda como borrador. No sale a la calle hasta que le des a
-            Activar, y solo si el canal está conectado.
-          </p>
-          <button disabled={busy}
-                  className="px-4 py-2 rounded-full text-sm font-bold justify-self-start disabled:opacity-50"
-                  style={{ background: "var(--yellow)", color: "#0A0B0E" }}>
-            {busy ? "Guardando…" : "Guardar borrador"}
-          </button>
-        </form>
+        <NewCampaignForm onSaved={() => { setOpen(false); reload(); }} />
       )}
 
       {rows.length === 0 && (
