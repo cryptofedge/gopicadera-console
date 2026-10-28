@@ -2,11 +2,14 @@
 
 ## 1. Supabase keys
 
-I already know the project ref from their image URLs:
+The live project is the one the storefront (`cryptofedge/GoPicadera`) talks to:
 
 ```
-https://xjuwamydkrzxdxjezlwa.supabase.co
+https://kfuamhhfthfmavxppagb.supabase.co
 ```
+
+(Earlier notes named `xjuwamydkrzxdxjezlwa`, the ref in the old site's image URLs. Neither the storefront nor
+the Edge Functions use it.)
 
 I need two values from **Supabase → Project Settings → API**:
 
@@ -70,3 +73,20 @@ only time anyone touches SQL for a user.
 **The first account must be the owner.** `profiles` defaults new users to
 `staff`, deliberately — an account that somehow gets created without being
 granted a role ends up with the least power, not the most.
+
+## 4. Apply order
+
+Each file assumes the ones above it. `APPLY_ALL.sql` is exactly the first two.
+
+1. `schema.sql`
+2. `integrations.sql`
+3. `whatsapp_orders.sql`, then `place_order.sql` — **not on `master` yet**; they are on the unmerged
+   branch `add-order-flow-and-elmini-media`. `place_order` is what the storefront calls, and the order
+   code trigger lives in `whatsapp_orders.sql`, so a fresh project needs both.
+4. `seed_menu.sql`
+5. `first_login.sql` (or `CREATE_OWNERS.sql`, which contains it)
+6. `stripe_payments.sql`
+7. `ads_oauth.sql`
+8. `ai_usage_writer.sql`
+9. `security_hardening.sql` — what a browser may write to orders, loyalty codes and integrations.
+   Run it last; it is safe to run again.

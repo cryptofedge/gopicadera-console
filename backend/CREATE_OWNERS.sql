@@ -65,11 +65,14 @@ grant execute on function complete_first_login(text) to authenticated;
 --    below has no account yet, that line simply does nothing -- create the
 --    user first, then re-run.
 --
+--    The addresses are placeholders. This repository is public, so the
+--    owners' real emails go in only in the SQL editor, never in a commit.
+--
 -- ---------------------------------------------------------------------
 insert into profiles (id, full_name, role, active, must_change_password)
 select u.id, 'Llulisa', 'owner', true, true
   from auth.users u
- where lower(u.email) = lower('Llulizag@gmail.com')
+ where lower(u.email) = lower('OWNER-1-EMAIL@example.com')
 on conflict (id) do update
   set full_name            = excluded.full_name,
       role                 = 'owner',
@@ -79,7 +82,7 @@ on conflict (id) do update
 insert into profiles (id, full_name, role, active, must_change_password)
 select u.id, 'Richard', 'owner', true, true
   from auth.users u
- where lower(u.email) = lower('Richardautogroup19@gmail.com')
+ where lower(u.email) = lower('OWNER-2-EMAIL@example.com')
 on conflict (id) do update
   set full_name            = excluded.full_name,
       role                 = 'owner',
