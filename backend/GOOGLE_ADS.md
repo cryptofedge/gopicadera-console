@@ -1,6 +1,6 @@
 # Connecting Google Ads
 
-Status (2026-10-28): merged and deployed; no Google credentials exist yet. Same shape as [META_ADS.md](META_ADS.md)
+Status (2026-10-28): merged and deployed; the owner has not saved a Google app in Canales yet. Same shape as [META_ADS.md](META_ADS.md)
 and [TIKTOK_ADS.md](TIKTOK_ADS.md); read Meta's first. Tests: `npm run test:functions`. Live check: `npm run check:connect`.
 
 ## How it works
@@ -15,6 +15,8 @@ and [TIKTOK_ADS.md](TIKTOK_ADS.md); read Meta's first. Tests: `npm run test:func
    database write at all), then exchanges the code (a form-encoded POST), and saves the connection via
    `apply_oauth_connection`.
 5. The owner lands back on the Integrations page with a banner saying it worked, or why not.
+6. On the Google Ads card she picks Go Picadera's account and taps **Guardar** (`choose_ads_account`). Until then
+   nothing is synced or launched on Google.
 
 ## What is different from Meta and TikTok
 
@@ -25,16 +27,22 @@ and [TIKTOK_ADS.md](TIKTOK_ADS.md); read Meta's first. Tests: `npm run test:func
 - **A response with no refresh token is a failed connection**, not a degraded one: it would be useless within the hour.
   The banner tells the owner to remove the app at myaccount.google.com/permissions and connect again.
 - **The account lookup is best-effort**, like Meta's. After the exchange the function calls
-  `customers:listAccessibleCustomers` and stores the customer ids (comma-joined, without the `customers/` prefix) in
-  `store_id`. If that call is refused, the connection is still saved with no account id. Accounts reachable only through
-  a manager account may not be listed (Google's docs say the call returns directly accessible customers).
-- **A developer token is needed for anything beyond connecting.** Every Ads API call (reading campaigns, pausing,
-  creating) sends a `developer-token` header from a Google Ads **manager** account's API Center, at **Explorer** level or
-  higher; Test level cannot touch real accounts. Set it as `GOOGLE_ADS_DEVELOPER_TOKEN`. If access to the restaurant's
-  account goes through that manager account, also set `GOOGLE_ADS_LOGIN_CUSTOMER_ID` (10 digits, no dashes). The
-  connect step itself only sends the token when it is set, and works without it.
-- **Who connects:** Fellito, once Llulisa has added his Google account as an Admin of her Google Ads account. His
-  Google Cloud project hosts the OAuth client; nothing there needs to belong to her.
+  `customers:listAccessibleCustomers` and records every customer id the login reaches, with its name
+  (`SELECT customer.descriptive_name FROM customer`, at most 20 lookups, a failed one leaves the name empty), in
+  `details.ad_accounts`. It never picks one: `store_id` holds only the account the owner chooses on the card. If the
+  lookup is refused, the connection is still saved with no accounts, and the ads worker fills them in on a later run.
+  Accounts reachable only through a manager account may not be listed (Google's docs say the call returns directly
+  accessible customers).
+- **No developer token and no manager account.** Google sunset developer tokens on 2026-09-09: new users need neither
+  a token nor a manager account, and a token that is sent is "optional and ignored". API access now belongs to the
+  **Google Cloud project that owns the OAuth client**, at Test, Explorer, Basic or Standard level. Test cannot touch
+  real accounts: Google answers `CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION`, which the card shows as "El proyecto de
+  Google Cloud aún no tiene acceso Explorer a la API de Google Ads". Google also lists a known issue: a project upgraded
+  after 2026-09-09 may get `AUTHORIZATION_ERROR` until its fix rolls out. `GOOGLE_ADS_DEVELOPER_TOKEN` is still sent if
+  someone sets it, and nothing depends on it. `GOOGLE_ADS_LOGIN_CUSTOMER_ID` (10 digits) only matters when access to
+  the restaurant's account goes through a manager account.
+- **Who connects:** Llulisa, with her own Google account, through her own Google Cloud project that hosts the OAuth
+  client. Her login may reach other Google Ads accounts too, which is why she picks Go Picadera's after connecting.
 - The API version is pinned (`oauth-lib.ts`, `GOOGLE_ADS_API_VERSION = "v26"`, released 2026-10-14). Google retires
   old versions on a schedule, so bump it deliberately.
 
@@ -43,6 +51,7 @@ and [TIKTOK_ADS.md](TIKTOK_ADS.md); read Meta's first. Tests: `npm run test:func
 | File | What it is |
 | --- | --- |
 | `admin/backend/ads_oauth.sql` | The same two functions as Meta/TikTok, now also accepting `google_ads` |
+| `admin/backend/ads_accounts.sql` | `ads_apps` + `set_ads_app` (her OAuth client, saved from Canales) and `choose_ads_account` |
 | `admin/supabase/functions/google-ads-oauth-start/` | Builds the signed state + consent URL (owner-only, `verify_jwt` on) |
 | `admin/supabase/functions/google-ads-oauth-callback/` | Google's redirect target (`--no-verify-jwt`) |
 | `admin/supabase/functions/_shared/oauth-lib.ts` | `googleAuthorizationUrl` / `googleTokenExchangeBody` and the pinned URLs |
@@ -52,49 +61,49 @@ and [TIKTOK_ADS.md](TIKTOK_ADS.md); read Meta's first. Tests: `npm run test:func
 ## Turn it on
 
 1. **Merge the pull request.** The console redeploys by itself (GitHub Actions).
-2. **Apply the database change** (safe to re-run):
-   ```bash
-   supabase db query --linked --project-ref kfuamhhfthfmavxppagb --file backend/ads_oauth.sql
-   ```
+2. **Apply the database changes** (safe to re-run): `backend/ads_oauth.sql`, and later in SETUP.md's apply order,
+   `backend/ads_accounts.sql`.
 3. **Deploy the two functions** (merging does NOT deploy these):
    ```bash
    supabase functions deploy google-ads-oauth-start --project-ref kfuamhhfthfmavxppagb
    supabase functions deploy google-ads-oauth-callback --no-verify-jwt --project-ref kfuamhhfthfmavxppagb
    ```
-   Both answer `503 not_configured` until step 5, so nothing can break in between. Then run
+   Both answer `503 not_configured` until step 5 saves the client, so nothing can break in between. Then run
    `supabase functions list` and confirm all four connection functions plus Stripe's are `ACTIVE`.
-4. **Google side** (the Google account that owns the restaurant's Google Ads account; this cannot be done for her):
+4. **Google side**, by Llulisa with the Google account that owns the restaurant's Google Ads account:
    1. In [Google Cloud Console](https://console.cloud.google.com), create a project (for example `go-picadera-ads`) and
-      enable the **Google Ads API**. Enabling it grants *Test* access automatically (test accounts only).
+      enable the **Google Ads API** in it. This is the project that will own the OAuth client. Enabling the API grants
+      *Test* access automatically (test accounts only).
    2. **OAuth consent screen:** user type External, add your support email, and add the scope
       `https://www.googleapis.com/auth/adwords`. **Publish the app ("In production").** While the status is *Testing*,
       Google expires refresh tokens after 7 days. Publishing does not fix a token issued earlier, so connect (again)
       after publishing. Because the Ads scope is sensitive, an unverified app shows a "Google hasn't verified this app"
       screen (Advanced, then continue); confirm Google's current verification rules when you get there.
-   3. **Credentials → Create OAuth client ID → Web application.** Add this exact redirect URI:
+   3. **Credentials → Create OAuth client ID → Web application.** Add this exact redirect URI (the Google Ads card in
+      Canales shows it with a copy button):
       `https://kfuamhhfthfmavxppagb.supabase.co/functions/v1/google-ads-oauth-callback`
       Copy the **Client ID** and **Client secret**.
-   4. **Access level for the project:** Google Ads API → Overview → *Upgrade access level*. *Explorer* allows production
-      accounts at up to 2,880 operations a day and Google may grant it automatically after you apply; *Basic* needs brand
-      verification; *Standard* is a manual audit (about 10 business days). Without at least Explorer the connection still
-      works, but the account lookup and any production API call are refused, so `store_id` stays empty.
-   5. If Google still shows you a **developer token** (Google Ads API Center on a manager account), copy it. If not, skip it.
-5. **Secrets** (reuses the `OAUTH_STATE_SECRET` that Meta's setup created; if that was never set, set it once with a fresh
-   random value):
-   ```bash
-   supabase secrets set GOOGLE_ADS_CLIENT_ID=XXXX GOOGLE_ADS_CLIENT_SECRET=XXXX --project-ref kfuamhhfthfmavxppagb
-   supabase secrets set GOOGLE_ADS_DEVELOPER_TOKEN=XXXX --project-ref kfuamhhfthfmavxppagb   # only if you have one
-   ```
-6. **Try it.** Integrations → Google Ads → **Conectar con Google Ads**. Approve on Google's screen. You land back with
-   "Google Ads quedó conectado", the card shows **Conectado**, and `store_id` holds the customer id(s) if the access level
-   allowed the lookup.
+   4. **Apply for Explorer access** on the same project: Google Ads API → its **Overview** page in Cloud Console →
+      apply for *Explorer*. Explorer allows production accounts at up to 2,880 operations a day and Google may grant it
+      automatically; *Basic* and *Standard* are reviewed. Google may require **billing on the Cloud project** before it
+      approves. Until then the connection still works, but the account lookup and every production call are refused,
+      and the card says the project still lacks Explorer access.
+   5. No developer token, no manager account.
+5. **Save the client in Canales.** Google Ads card → **App de Google**: Client ID and Client Secret, **Guardar**. The
+   secret is never shown again; leave it blank later to keep it. Saving a different Client ID disconnects Google
+   Ads, because the old refresh token belongs to the old client. Nothing goes in the Supabase dashboard; the
+   `GOOGLE_ADS_CLIENT_ID`/`GOOGLE_ADS_CLIENT_SECRET` env vars still win if someone sets them, as an override.
+6. **Try it.** **Conectar con Google Ads** (enabled once the client is saved). Approve on Google's screen. You land back
+   with "Google Ads quedó conectado" and the card shows **Conectado**.
+7. **Choose.** On the same card, pick Go Picadera's account and tap **Guardar**. If the list is empty, the project's
+   Explorer access is not through yet; the ads worker reads the list again every 15 minutes.
 
 ## Known limits
 
-- Nothing in the console reads these credentials yet: connecting stores them and that is all. A feature that creates ads or
-  reads spend still has to be built, and it must mint access tokens from the stored refresh token.
+- The ads worker (ADS_WORKER.md) mints an access token from the stored refresh token on every run, with the same client.
 - A refresh token stops working if the owner revokes the app, changes the relevant Google permissions, or the consent screen
-  is still in *Testing*. The card shows **Con problema** only when a connection attempt fails; it does not yet check an
-  existing token. Reconnecting (**Reintentar conexión**) replaces it.
-- Google's access-level and developer-token rules changed in September 2026 and were described inconsistently across its own
-  pages and third-party coverage when this was written. Treat step 4 as "verify on Google's live pages", not as gospel.
+  is still in *Testing*. The ads worker then marks the card **Con problema**; reconnecting (**Reintentar conexión**)
+  replaces the token.
+- Google's access rules changed on 2026-09-09 (developer tokens sunset, access levels on the Cloud project). This file
+  follows Google's pages as updated on 2026-10-28 (developers.google.com/google-ads/api/docs/first-call/dev-token and
+  .../api-policy/access-levels); verify there if something does not match.

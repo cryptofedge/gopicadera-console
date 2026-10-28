@@ -7,7 +7,10 @@
  * Meta, TikTok and Google Ads are the providers with a real connection flow: the button
  * below calls a Supabase Edge Function that redirects to the platform's own
  * consent screen, and the callback stores the resulting token server-side —
- * the owner never sees or pastes a key. Everything else still requires the
+ * the owner never sees or pastes a token. She does create each platform's
+ * developer app herself and saves its id and secret on the card (ads_apps,
+ * write-only like every other secret here), and once connected she picks which
+ * of the ad accounts and Pages the login reaches is Go Picadera's. Everything else still requires the
  * restaurant to be approved as a partner first, which then yields a store id
  * and a key pair to paste. `oauth: true` on a card is reserved for a provider
  * actually wired through a redirect like that; it used to be claimed for
@@ -19,8 +22,10 @@
  * refuses them the table even if they craft the request by hand.
  */
 import { useEffect, useState } from "react";
-import { browserClient } from "@/lib/supabase-browser";
+import { browserClient, IS_DEMO } from "@/lib/supabase-browser";
 import { useQuery } from "@/lib/useQuery";
+import { accountLabel, chosenAdAccount, chosenPage, NO_ACCOUNT_CHOSEN, pageLabel } from "@/lib/ads-choice";
+import type { AdsDetails } from "@/lib/ads-choice";
 
 type Provider =
   | "doordash" | "ubereats" | "grubhub"
@@ -37,28 +42,257 @@ type Row = {
   store_id: string | null;
   client_id: string | null;
   has_secret?: boolean;
-  // Non-secret facts the connect step recorded (Meta: Pages, their Instagram, token expiry).
-  details?: {
-    pages?: { id: string; name: string | null; instagram: { id: string; username: string | null } | null }[];
-    token_expires_at?: string | null;
-  } | null;
+  // Non-secret facts the connect step recorded: every ad account and Page the login reaches, the owner's
+  // choice among them, and the token's expiry. See src/lib/ads-choice.ts.
+  details?: AdsDetails | null;
   last_order_at: string | null;
   last_error: string | null;
   auto_accept: boolean;
 };
 
-/** What a connected ad account is attached to, so the owner can see it is the right one. */
+type AdsProvider = "meta_ads" | "tiktok_ads" | "google_ads";
+
+/** The owner's own developer app for an ad platform (ads_apps). The secret itself never reaches the browser. */
+type AdsAppRow = { provider: AdsProvider; app_id: string | null; login_config_id: string | null; has_secret: boolean };
+
+const isAdsProvider = (p: Provider): p is AdsProvider => p === "meta_ads" || p === "tiktok_ads" || p === "google_ads";
+
+/** What a connected ad platform is attached to, so the owner can see it is the right one. */
 function adsSummary(r: Row): string {
   const parts: string[] = [];
-  const accounts = (r.store_id || "").split(",").filter(Boolean).length;
-  parts.push(accounts === 1 ? "1 cuenta de anuncios" : `${accounts} cuentas de anuncios`);
-  const page = r.details?.pages?.[0];
-  if (page) parts.push(`Página ${page.name ?? page.id}`);
-  if (page?.instagram) parts.push(`Instagram ${page.instagram.username ? "@" + page.instagram.username : "conectado"}`);
-  else if (r.provider === "meta_ads" && page) parts.push("sin Instagram vinculado a la página");
+  const account = chosenAdAccount(r.store_id, r.details);
+  parts.push(account ? `Cuenta ${accountLabel(account)}` : "Sin cuenta elegida");
+  if (r.provider === "meta_ads") {
+    const page = chosenPage(r.details);
+    if (!page) parts.push("sin Página elegida");
+    else {
+      parts.push(`Página ${page.name ?? page.id}`);
+      parts.push(page.instagram ? `Instagram ${page.instagram.username ? "@" + page.instagram.username : "vinculado"}` : "sin Instagram vinculado a la página");
+    }
+  }
   const exp = r.details?.token_expires_at;
   if (exp) parts.push(`vence el ${new Date(exp).toLocaleDateString("es-DO", { day: "2-digit", month: "short" })}`);
   return parts.join(" · ");
+}
+
+// Where each platform sends the owner back after she approves. She pastes this exact address into her app.
+// The demo build has a placeholder Supabase URL, so it shows the live project's address instead.
+const LIVE_SUPABASE_URL = "https://kfuamhhfthfmavxppagb.supabase.co";
+const SUPABASE_URL = ((IS_DEMO ? "" : process.env.NEXT_PUBLIC_SUPABASE_URL) || LIVE_SUPABASE_URL).replace(/\/$/, "");
+const CALLBACK_SLUG: Record<AdsProvider, string> = { meta_ads: "meta", tiktok_ads: "tiktok", google_ads: "google-ads" };
+const redirectUri = (p: AdsProvider) => `${SUPABASE_URL}/functions/v1/${CALLBACK_SLUG[p]}-oauth-callback`;
+
+const APP_INFO: Record<AdsProvider, { title: string; idLabel: string; secretLabel: string; where: string; redirectWhere: string }> = {
+  meta_ads: {
+    title: "App de Meta",
+    idLabel: "App ID",
+    secretLabel: "App Secret",
+    where: "En developers.facebook.com → tu app → Configuración → Básica.",
+    redirectWhere: "Pégala en Inicio de sesión con Facebook para empresas → Configuración → URI de redireccionamiento de OAuth válidos.",
+  },
+  tiktok_ads: {
+    title: "App de TikTok",
+    idLabel: "App ID",
+    secretLabel: "Secret",
+    where: "En business-api.tiktok.com → My Apps → tu app.",
+    redirectWhere: "Pégala como Advertiser redirect URL de tu app.",
+  },
+  google_ads: {
+    title: "App de Google",
+    idLabel: "Client ID",
+    secretLabel: "Client Secret",
+    where: "En console.cloud.google.com → APIs y servicios → Credenciales → tu cliente OAuth (aplicación web).",
+    redirectWhere: "Pégala en URI de redireccionamiento autorizados de ese cliente.",
+  },
+};
+
+/**
+ * The owner's own app for one ad platform: the redirect address she pastes into it, and its id and secret,
+ * saved through set_ads_app. Nothing goes in the Supabase dashboard. The secret is write-only from here.
+ */
+function AdsAppSection({ provider, app, onSaved }: { provider: AdsProvider; app: AdsAppRow | null; onSaved: () => void }) {
+  const info = APP_INFO[provider];
+  const saved = !!(app?.app_id && app?.has_secret);
+  const [open, setOpen] = useState(!saved);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [copied, setCopied] = useState(false);
+  const uri = redirectUri(provider);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(uri);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setError("No se pudo copiar. Selecciona la dirección y cópiala a mano.");
+    }
+  }
+
+  async function save(fd: FormData) {
+    const appId = String(fd.get("app_id") ?? "").trim();
+    if (saved && app?.app_id && appId !== app.app_id &&
+        !confirm(`Cambiar el ${info.idLabel} desconecta ${info.title.replace("App de ", "")}: el permiso guardado es de la app anterior y habrá que conectar otra vez. ¿Seguir?`)) {
+      return;
+    }
+    setBusy(true);
+    setError("");
+    const { error: err } = await browserClient().rpc("set_ads_app", {
+      p_provider: provider,
+      p_app_id: appId,
+      // Blank keeps the saved secret, so fixing the id never means retyping it.
+      p_app_secret: String(fd.get("app_secret") ?? "").trim() || null,
+      p_login_config_id: provider === "meta_ads" ? String(fd.get("login_config_id") ?? "").trim() || null : null,
+    });
+    setBusy(false);
+    if (err) { setError(err.message); return; }
+    setOpen(false);
+    onSaved();
+  }
+
+  return (
+    <div className="mb-3 pt-3 border-t" style={{ borderColor: "var(--line)" }}>
+      <div className="flex items-center gap-2">
+        <span className="text-xs font-bold">{info.title}</span>
+        <span className="text-[11px] font-bold" style={{ color: saved ? "var(--green)" : "var(--yellow)" }}>
+          {saved ? "guardada" : app?.app_id ? "falta la clave secreta" : "sin guardar"}
+        </span>
+        {saved && (
+          <button type="button" onClick={() => setOpen((v) => !v)}
+                  className="ml-auto text-[11px] font-bold" style={{ color: "var(--muted)" }}>
+            {open ? "Cerrar" : "Editar"}
+          </button>
+        )}
+      </div>
+      {saved && !open && (
+        <p className="text-xs mt-1" style={{ color: "var(--faint)" }}>{info.idLabel} {app?.app_id}</p>
+      )}
+
+      {open && (
+        <form action={save} className="grid gap-2 mt-2">
+          <p className="text-xs" style={{ color: "var(--faint)" }}>
+            Dirección de regreso. {info.redirectWhere}
+          </p>
+          <div className="flex gap-2 items-center">
+            <code className="flex-1 min-w-0 px-2 py-1.5 rounded-lg border text-[11px] break-all select-all" style={field}>{uri}</code>
+            <button type="button" onClick={copy}
+                    className="px-3 py-1.5 rounded-full text-xs font-bold flex-none"
+                    style={{ background: "var(--surface-3)", color: "var(--muted)" }}>
+              {copied ? "Copiada" : "Copiar"}
+            </button>
+          </div>
+          <p className="text-xs" style={{ color: "var(--faint)" }}>{info.where}</p>
+          <input name="app_id" defaultValue={app?.app_id ?? ""} placeholder={info.idLabel} required
+                 autoComplete="off" spellCheck={false}
+                 className="px-3 py-2 rounded-lg border outline-none text-sm" style={field} />
+          <input name="app_secret" type="password" autoComplete="new-password"
+                 placeholder={app?.has_secret ? `${info.secretLabel}: guardado — déjalo vacío para conservarlo` : info.secretLabel}
+                 className="px-3 py-2 rounded-lg border outline-none text-sm" style={field} />
+          {provider === "meta_ads" && (
+            <input name="login_config_id" defaultValue={app?.login_config_id ?? ""}
+                   placeholder="ID de configuración (opcional, Inicio de sesión para empresas)"
+                   autoComplete="off" spellCheck={false}
+                   className="px-3 py-2 rounded-lg border outline-none text-sm" style={field} />
+          )}
+          <p className="text-xs" style={{ color: "var(--faint)" }}>
+            La clave secreta se guarda en la base de datos y no se vuelve a mostrar, ni a ti.
+          </p>
+          {error && <p className="text-xs" style={{ color: "var(--red)" }} role="alert">{error}</p>}
+          <button disabled={busy}
+                  className="px-4 py-2 rounded-full text-xs font-bold justify-self-start disabled:opacity-50"
+                  style={{ background: "var(--yellow)", color: "#0A0B0E" }}>
+            {busy ? "Guardando…" : "Guardar"}
+          </button>
+        </form>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Which of the ad accounts (and on Meta, Pages) this login reaches is Go Picadera's. Whoever connected may
+ * see other businesses' too, so nothing is chosen for her: until she picks here, nothing is synced, launched
+ * or paused on this platform. Saved through choose_ads_account.
+ */
+function AdsAccountChooser({ row, onSaved }: { row: Row; onSaved: () => void }) {
+  const details = row.details || {};
+  const accounts = details.ad_accounts || [];
+  const pages = details.pages || [];
+  const isMeta = row.provider === "meta_ads";
+  const current = chosenAdAccount(row.store_id, details);
+  const currentPage = isMeta ? chosenPage(details) : null;
+  const [account, setAccount] = useState(current?.id ?? "");
+  const [page, setPage] = useState(currentPage?.id ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const name = META[row.provider].name;
+
+  const missing = !current || (isMeta && !currentPage);
+  const changed = account !== (current?.id ?? "") || (isMeta && page !== (currentPage?.id ?? ""));
+  const ready = !!account && (!isMeta || !!page);
+
+  async function save() {
+    if (current && account !== current.id &&
+        !confirm(`Las campañas que se importaron de la cuenta ${accountLabel(current)} dejan de mostrarse en Promoción. Las que hiciste aquí se quedan. ¿Cambiar de cuenta?`)) {
+      return;
+    }
+    setBusy(true);
+    setError("");
+    const { error: err } = await browserClient().rpc("choose_ads_account", {
+      p_provider: row.provider,
+      p_account_id: account,
+      p_page_id: isMeta ? page : null,
+    });
+    setBusy(false);
+    if (err) { setError(err.message); return; }
+    onSaved();
+  }
+
+  return (
+    <div className="mb-3 pt-3 border-t grid gap-2" style={{ borderColor: "var(--line)" }}>
+      <span className="text-xs font-bold">Cuenta de Go Picadera</span>
+      {accounts.length === 0 ? (
+        <p className="text-xs" style={{ color: "var(--yellow)" }}>
+          Esta conexión todavía no ve ninguna cuenta publicitaria. Si acabas de aceptar una invitación, aparece
+          aquí sola en unos minutos.
+        </p>
+      ) : (
+        <>
+          {missing && (
+            <p className="text-xs" style={{ color: "var(--yellow)" }}>
+              Elige la cuenta publicitaria de Go Picadera{isMeta ? " y su Página de Facebook" : ""}. Hasta entonces
+              no se publica, pausa ni sincroniza nada en {name}. Quien conectó puede ver otras cuentas: elige solo la
+              del restaurante.
+            </p>
+          )}
+          <select value={account} onChange={(e) => setAccount(e.target.value)} disabled={busy}
+                  aria-label={`Cuenta publicitaria de ${name}`}
+                  className="px-3 py-2 rounded-lg border outline-none text-sm" style={field}>
+            <option value="">Elige la cuenta publicitaria…</option>
+            {accounts.map((a) => <option key={a.id} value={a.id}>{accountLabel(a)}</option>)}
+          </select>
+          {isMeta && (pages.length === 0 ? (
+            <p className="text-xs" style={{ color: "var(--yellow)" }}>
+              Esta conexión no ve ninguna Página de Facebook. Hace falta una para anunciar en Facebook e Instagram.
+            </p>
+          ) : (
+            <select value={page} onChange={(e) => setPage(e.target.value)} disabled={busy}
+                    aria-label="Página de Facebook de los anuncios"
+                    className="px-3 py-2 rounded-lg border outline-none text-sm" style={field}>
+              <option value="">Elige la Página de Facebook…</option>
+              {pages.map((p) => <option key={p.id} value={p.id}>{pageLabel(p)}</option>)}
+            </select>
+          ))}
+          {error && <p className="text-xs" style={{ color: "var(--red)" }} role="alert">{error}</p>}
+          <button type="button" onClick={save} disabled={busy || !ready || !changed}
+                  className="px-4 py-2 rounded-full text-xs font-bold justify-self-start disabled:opacity-50"
+                  style={{ background: "var(--yellow)", color: "#0A0B0E" }}>
+            {busy ? "Guardando…" : "Guardar"}
+          </button>
+        </>
+      )}
+    </div>
+  );
 }
 
 /**
@@ -121,7 +355,7 @@ const META: Record<Provider, { name: string; blurb: string; portal: string; colo
 
   meta_ads: {
     name: "Meta",
-    blurb: "Facebook e Instagram. Conecta tu propia cuenta de Meta Business con un botón — nunca copias una llave.",
+    blurb: "Facebook e Instagram. Guarda abajo tu app de Meta y conecta tu cuenta de Meta Business con un botón.",
     portal: "business.facebook.com",
     color: "#0866FF",
     oauth: true,
@@ -129,7 +363,7 @@ const META: Record<Provider, { name: string; blurb: string; portal: string; colo
   },
   google_ads: {
     name: "Google Ads",
-    blurb: "Conecta tu propia cuenta de Google Ads con un botón — nunca copias una llave.",
+    blurb: "Guarda abajo tu app de Google y conecta tu cuenta de Google Ads con un botón.",
     portal: "ads.google.com",
     color: "#4285F4",
     oauth: true,
@@ -137,7 +371,7 @@ const META: Record<Provider, { name: string; blurb: string; portal: string; colo
   },
   tiktok_ads: {
     name: "TikTok",
-    blurb: "Conecta tu propia cuenta de TikTok for Business con un botón — nunca copias una llave.",
+    blurb: "Guarda abajo tu app de TikTok y conecta tu cuenta de TikTok for Business con un botón.",
     portal: "business.tiktok.com",
     color: "#FE2C55",
     oauth: true,
@@ -300,6 +534,13 @@ export default function IntegrationsPage() {
         .select("provider, kind, status, store_id, client_id, has_secret, details, last_order_at, last_error, auto_accept")
         .order("provider") as never,
   );
+  // The owner's own developer apps. A database without ads_accounts.sql answers with an error; the cards then
+  // simply show every app as not saved.
+  const apps = useQuery<AdsAppRow[]>(
+    (sb) => sb.from("ads_apps").select("provider, app_id, login_config_id, has_secret") as never,
+  );
+  const appFor = (p: AdsProvider) => (apps.data ?? []).find((a) => a.provider === p) ?? null;
+  const reloadAll = () => { reload(); apps.reload(); };
 
   const [open, setOpen] = useState<Provider | null>(null);
   const [busy, setBusy] = useState(false);
@@ -336,7 +577,7 @@ export default function IntegrationsPage() {
       try {
         const body = await res.json();
         if (body?.error === "not_configured") {
-          return `La conexión con ${name} todavía no está lista: falta un paso del lado técnico. Avísale a Fellito.`;
+          return `La conexión con ${name} todavía no está lista: guarda la app de ${name} (ID y clave secreta) en esta misma tarjeta. Si ya está guardada, avísale a Fellito.`;
         }
         if (body?.error === "forbidden") return "Solo una cuenta de dueño puede conectar esto.";
       } catch { /* fall through to the generic message */ }
@@ -457,6 +698,10 @@ export default function IntegrationsPage() {
            style={{ gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))" }}>
         {group.map((r) => {
           const m = META[r.provider];
+          const ads = r.kind === "ads" && isAdsProvider(r.provider) ? r.provider : null;
+          const app = ads ? appFor(ads) : null;
+          // Connecting goes through the owner's own app, so it waits until that app is saved.
+          const appReady = !ads || !!(app?.app_id && app?.has_secret);
           return (
             <div key={r.provider} className="rounded-xl border p-4"
                  style={{ background: "var(--surface)", borderColor: "var(--line)" }}>
@@ -474,11 +719,20 @@ export default function IntegrationsPage() {
                 {r.status !== "connected" ? m.blurb : r.kind === "ads" ? adsSummary(r) : ago(r.last_order_at)}
               </p>
 
-              {r.last_error && (
+              {/* The ads worker's "choose an account" note is what the chooser below already says. */}
+              {r.last_error && !(ads && r.last_error === NO_ACCOUNT_CHOSEN) && (
                 <p className="text-xs mb-3" style={{ color: "var(--red)" }}>
                   {r.last_error}
                 </p>
               )}
+
+              {ads && r.has_secret && (r.status === "connected" || r.status === "error") && (
+                <AdsAccountChooser
+                  key={`${r.store_id}|${r.details?.page_id}|${r.details?.chosen_at}|${(r.details?.ad_accounts ?? []).length}|${(r.details?.pages ?? []).length}`}
+                  row={r} onSaved={reload} />
+              )}
+
+              {ads && <AdsAppSection key={`${app?.app_id}|${app?.has_secret}`} provider={ads} app={app} onSaved={reloadAll} />}
 
               {r.status === "connected" && r.provider !== "whatsapp" && r.kind !== "ads" && (
                 <label className="flex items-center gap-2 mb-3 text-xs cursor-pointer">
@@ -498,7 +752,8 @@ export default function IntegrationsPage() {
                         ? connectVia(r.provider)
                         : setOpen(open === r.provider ? null : r.provider)
                     }
-                    disabled={connecting === r.provider}
+                    disabled={connecting === r.provider || !appReady}
+                    title={appReady ? undefined : `Primero guarda la app de ${m.name}`}
                     className="px-3 py-1.5 rounded-full text-xs font-bold disabled:opacity-50"
                     style={{ background: "var(--yellow)", color: "#0A0B0E" }}
                   >
@@ -576,8 +831,9 @@ export default function IntegrationsPage() {
             <strong style={{ color: "var(--text)" }}>
               {oauthNames.join(", ")}
             </strong>{" "}
-            se conectan con un botón: te mandan a tu propia cuenta, la autorizas y
-            listo. Nunca tienes que copiar una llave.
+            se conectan con tu propia app: la creas una vez en cada plataforma, pegas
+            aquí su ID y su clave secreta, y conectas con un botón. Después eliges cuál
+            de tus cuentas publicitarias es la de Go Picadera.
           </p>
         )}
 

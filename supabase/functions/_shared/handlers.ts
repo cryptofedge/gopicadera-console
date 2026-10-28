@@ -1,13 +1,17 @@
 // The request handlers, written against injected dependencies (env, fetch, clock) so they can be
 // tested end to end without Deno, a network, or a real Stripe/Meta account.
-import { buildCheckoutParams, corsHeaders, json, toFormBody, verifyStripeSignature } from "./stripe-lib.ts";
+import { buildCheckoutParams, corsHeaders, hmacSha256Hex, json, toFormBody, verifyStripeSignature } from "./stripe-lib.ts";
 import type { CheckoutOrder, Env } from "./stripe-lib.ts";
 import {
-  metaAdAccountsUrl, metaAuthorizationUrl, metaCodeExchangeUrl, metaDebugTokenUrl, metaLongLivedExchangeUrl, metaPagesUrl,
+  metaAuthorizationUrl, metaCodeExchangeUrl, metaDebugTokenUrl, metaLongLivedExchangeUrl,
   signState, verifyState,
   tiktokAuthorizationUrl, tiktokTokenExchangeBody, TIKTOK_TOKEN_URL,
-  googleAuthorizationUrl, googleTokenExchangeBody, GOOGLE_TOKEN_URL, GOOGLE_ACCESSIBLE_CUSTOMERS_URL,
+  googleAuthorizationUrl, googleTokenExchangeBody, GOOGLE_TOKEN_URL,
 } from "./oauth-lib.ts";
+import { googleAccessibleAccounts, metaAdAccounts, metaPages, tiktokAdvertisers } from "./ads-platforms.ts";
+import type { AdAccount, MetaPage } from "./ads-platforms.ts";
+import { loadAdsApp } from "./ads-apps.ts";
+import type { AdsApp } from "./ads-apps.ts";
 
 export interface Deps {
   env: Env;
@@ -41,21 +45,31 @@ function config(env: Env) {
     anonKey: env.SUPABASE_ANON_KEY || "",
     adminOrigins: (env.ADMIN_ORIGINS || DEFAULT_ADMIN_ORIGINS).split(",").map((s) => s.trim()).filter(Boolean),
     adminUrl: (env.ADMIN_URL || "https://admin.gopicadera.com").replace(/\/$/, ""),
-    // Signs the short-lived OAuth "state" parameter (see oauth-lib.ts). Distinct from the Stripe
-    // webhook secret on purpose -- a leak of one must never let someone forge the other.
+    // Optional override for the key that signs the short-lived OAuth "state" parameter (see oauthStateKey).
     oauthStateSecret: env.OAUTH_STATE_SECRET || "",
-    metaAppId: env.META_APP_ID || "",
-    metaAppSecret: env.META_APP_SECRET || "",
-    // Optional. Only for apps whose permissions live in a "Facebook Login for Business" configuration.
-    metaLoginConfigId: env.META_LOGIN_CONFIG_ID || "",
-    tiktokAppId: env.TIKTOK_APP_ID || "",
-    tiktokAppSecret: env.TIKTOK_APP_SECRET || "",
-    googleClientId: env.GOOGLE_ADS_CLIENT_ID || "",
-    googleClientSecret: env.GOOGLE_ADS_CLIENT_SECRET || "",
-    // Optional. Google moved access levels onto the Cloud project in September 2026 and its docs do not say
-    // whether this header is still read, so it is sent only when set and nothing depends on it being there.
+    // Each platform's app id and secret come from loadAdsApp (ads-apps.ts): the owner saves them in Canales,
+    // and the META_APP_ID / TIKTOK_APP_ID / GOOGLE_ADS_CLIENT_ID env pairs override when set.
+    // Optional. Developer tokens were sunset on 2026-09-09 (access belongs to the Cloud project now) and one
+    // that is sent is ignored, so it is sent only when set and nothing depends on it.
     googleDeveloperToken: env.GOOGLE_ADS_DEVELOPER_TOKEN || "",
   };
+}
+
+// What the derived state key is an HMAC of. Changing it invalidates every state in flight (10 minutes' worth).
+const OAUTH_STATE_KEY_LABEL = "gopicadera-oauth-state-v1";
+
+/**
+ * The key that signs the OAuth "state" parameter. OAUTH_STATE_SECRET wins when someone sets it; otherwise it
+ * is derived from the service-role key Supabase injects into every function, so nobody has to create or paste
+ * one. An HMAC rather than the key itself: the state's signature never exposes anything about the service key,
+ * and the derived key is distinct from the Stripe webhook secret, so a leak of one never forges the other.
+ * Empty only when neither is available.
+ */
+export async function oauthStateKey(env: Env): Promise<string> {
+  const c = config(env);
+  if (c.oauthStateSecret) return c.oauthStateSecret;
+  if (!c.serviceKey) return "";
+  return hmacSha256Hex(c.serviceKey, OAUTH_STATE_KEY_LABEL);
 }
 
 export class RpcError extends Error {
@@ -249,31 +263,23 @@ export async function handleStripeStatus(req: Request, deps: Deps): Promise<Resp
 // The non-secret facts about a Meta connection that the ads work needs later: which Page an ad speaks as,
 // the Instagram account linked to it, and when the token stops working. Best-effort, like the ad-account
 // lookup -- each part that fails is left out rather than undoing a good connection.
+// The Pages are a list to choose from, like the ad accounts: the owner picks the one the ads speak as in Canales
+// (choose_ads_account in backend/ads_accounts.sql), because this login may administer other businesses' Pages too.
 type MetaDetails = {
-  pages?: { id: string; name: string | null; instagram: { id: string; username: string | null } | null }[];
+  pages?: MetaPage[];
+  ad_accounts?: AdAccount[];
   token_expires_at?: string | null;
   scopes?: string[];
 };
 
-async function metaConnectionDetails(c: ReturnType<typeof config>, fetchFn: typeof fetch, accessToken: string): Promise<MetaDetails> {
+async function metaConnectionDetails(app: AdsApp, fetchFn: typeof fetch, accessToken: string): Promise<MetaDetails> {
   const details: MetaDetails = {};
   try {
-    const r = await fetchFn(metaPagesUrl(accessToken));
-    const body: { data?: { id?: string; name?: string; instagram_business_account?: { id?: string; username?: string } }[] } =
-      await r.json().catch(() => ({}));
-    if (r.ok) {
-      details.pages = (body.data || []).filter((p) => p.id).map((p) => ({
-        id: String(p.id),
-        name: p.name ?? null,
-        instagram: p.instagram_business_account?.id
-          ? { id: String(p.instagram_business_account.id), username: p.instagram_business_account.username ?? null }
-          : null,
-      }));
-    }
+    details.pages = await metaPages(fetchFn, accessToken);
   } catch (e) { console.error("could not list Pages (connection still saved):", e instanceof Error ? e.message : e); }
 
   try {
-    const r = await fetchFn(metaDebugTokenUrl(c.metaAppId, c.metaAppSecret, accessToken));
+    const r = await fetchFn(metaDebugTokenUrl(app.appId, app.appSecret, accessToken));
     const body: { data?: { expires_at?: number; scopes?: string[] } } = await r.json().catch(() => ({}));
     if (r.ok && body.data) {
       // 0 means the token does not expire.
@@ -305,12 +311,14 @@ export async function handleMetaOAuthStart(req: Request, deps: Deps): Promise<Re
 
   try {
     if (!(await callerIsOwner(c, deps.fetch, authHeader))) return json({ error: "forbidden" }, 403, cors);
-    if (!c.metaAppId || !c.oauthStateSecret) return json({ error: "not_configured" }, 503, cors);
+    const app = await loadAdsApp(deps.env, deps.fetch, "meta_ads");
+    const stateKey = await oauthStateKey(deps.env);
+    if (!app || !stateKey) return json({ error: "not_configured" }, 503, cors);
 
     const nowSec = Math.floor((deps.now ? deps.now() : Date.now()) / 1000);
-    const state = await signState(c.oauthStateSecret, "meta_ads", nowSec);
+    const state = await signState(stateKey, "meta_ads", nowSec);
     const redirectUri = `${c.supabaseUrl}/functions/v1/meta-oauth-callback`;
-    return json({ url: metaAuthorizationUrl(c.metaAppId, redirectUri, state, c.metaLoginConfigId) }, 200, cors);
+    return json({ url: metaAuthorizationUrl(app.appId, redirectUri, state, app.loginConfigId) }, 200, cors);
   } catch (e) {
     console.error("meta-oauth-start failed:", e instanceof Error ? e.message : e);
     return json({ error: "server_error" }, 500, cors);
@@ -319,12 +327,17 @@ export async function handleMetaOAuthStart(req: Request, deps: Deps): Promise<Re
 
 // Callback: Meta's own top-level redirect after the owner approves or denies. No Supabase login
 // reaches here (same reason the Stripe webhook has none) -- the signed state parameter is what
-// proves this belongs to a flow an authenticated owner actually started, checked BEFORE anything
-// else runs, so a forged or expired state cannot trigger so much as a failure write.
+// proves this belongs to a flow an authenticated owner actually started, checked before anything
+// is written, so a forged or expired state cannot trigger so much as a failure write. The only
+// thing before it is reading which app to use, so a bare GET can answer 503 while the owner has
+// not saved the app yet (what `npm run check:connect` reads).
 export async function handleMetaOAuthCallback(req: Request, deps: Deps): Promise<Response> {
   const c = config(deps.env);
   if (req.method !== "GET") return json({ error: "method_not_allowed" }, 405);
-  if (!c.oauthStateSecret || !c.supabaseUrl || !c.serviceKey) return json({ error: "not_configured" }, 503);
+  if (!c.supabaseUrl || !c.serviceKey) return json({ error: "not_configured" }, 503);
+  const app = await loadAdsApp(deps.env, deps.fetch, "meta_ads");
+  const stateKey = await oauthStateKey(deps.env);
+  if (!app || !stateKey) return json({ error: "not_configured" }, 503);
 
   const nowSec = Math.floor((deps.now ? deps.now() : Date.now()) / 1000);
   const u = new URL(req.url);
@@ -340,7 +353,7 @@ export async function handleMetaOAuthCallback(req: Request, deps: Deps): Promise
   };
 
   const state = u.searchParams.get("state");
-  const check = await verifyState(c.oauthStateSecret, "meta_ads", state, nowSec);
+  const check = await verifyState(stateKey, "meta_ads", state, nowSec);
   if (!check.ok) return backToConsole({ oauth: "meta", status: "error", reason: check.reason }); // state itself unproven: do not even record a failure
 
   const metaError = u.searchParams.get("error");
@@ -348,11 +361,10 @@ export async function handleMetaOAuthCallback(req: Request, deps: Deps): Promise
 
   const code = u.searchParams.get("code");
   if (!code) return fail("no_code");
-  if (!c.metaAppId || !c.metaAppSecret) return fail("not_configured");
 
   try {
     const redirectUri = `${c.supabaseUrl}/functions/v1/meta-oauth-callback`;
-    const shortRes = await deps.fetch(metaCodeExchangeUrl(c.metaAppId, c.metaAppSecret, redirectUri, code));
+    const shortRes = await deps.fetch(metaCodeExchangeUrl(app.appId, app.appSecret, redirectUri, code));
     const shortBody: { access_token?: string; error?: { message?: string } } = await shortRes.json().catch(() => ({}));
     if (!shortRes.ok || !shortBody.access_token) return fail(shortBody.error?.message || "token exchange failed");
 
@@ -360,22 +372,22 @@ export async function handleMetaOAuthCallback(req: Request, deps: Deps): Promise
     // whole connection just because it did not go through.
     let accessToken = shortBody.access_token;
     try {
-      const longRes = await deps.fetch(metaLongLivedExchangeUrl(c.metaAppId, c.metaAppSecret, accessToken));
+      const longRes = await deps.fetch(metaLongLivedExchangeUrl(app.appId, app.appSecret, accessToken));
       const longBody: { access_token?: string } = await longRes.json().catch(() => ({}));
       if (longRes.ok && longBody.access_token) accessToken = longBody.access_token;
     } catch (e) { console.error("long-lived token exchange failed, keeping the short-lived one:", e instanceof Error ? e.message : e); }
 
-    let accountId = "";
+    const details = await metaConnectionDetails(app, deps.fetch, accessToken);
     try {
-      const acctRes = await deps.fetch(metaAdAccountsUrl(accessToken));
-      const acctBody: { data?: { account_id?: string }[] } = await acctRes.json().catch(() => ({}));
-      accountId = (acctBody.data || []).map((a) => a.account_id).filter((x): x is string => !!x).join(",");
+      details.ad_accounts = await metaAdAccounts(deps.fetch, accessToken);
     } catch (e) { console.error("could not list ad accounts (connection still saved):", e instanceof Error ? e.message : e); }
 
-    const details = await metaConnectionDetails(c, deps.fetch, accessToken);
-
+    // p_account_id is every account this login reaches, for the database to check a kept choice against; it is
+    // never stored as the choice (see apply_oauth_connection). The ads worker fills the lists in later if a
+    // lookup here failed.
     await rpc(c, deps.fetch, "apply_oauth_connection", {
-      p_provider: "meta_ads", p_access_token: accessToken, p_account_id: accountId, p_details: details,
+      p_provider: "meta_ads", p_access_token: accessToken,
+      p_account_id: (details.ad_accounts || []).map((a) => a.id).join(","), p_details: details,
     });
     return backToConsole({ oauth: "meta", status: "connected" });
   } catch (e) {
@@ -397,12 +409,14 @@ export async function handleTiktokOAuthStart(req: Request, deps: Deps): Promise<
 
   try {
     if (!(await callerIsOwner(c, deps.fetch, authHeader))) return json({ error: "forbidden" }, 403, cors);
-    if (!c.tiktokAppId || !c.oauthStateSecret) return json({ error: "not_configured" }, 503, cors);
+    const app = await loadAdsApp(deps.env, deps.fetch, "tiktok_ads");
+    const stateKey = await oauthStateKey(deps.env);
+    if (!app || !stateKey) return json({ error: "not_configured" }, 503, cors);
 
     const nowSec = Math.floor((deps.now ? deps.now() : Date.now()) / 1000);
-    const state = await signState(c.oauthStateSecret, "tiktok_ads", nowSec);
+    const state = await signState(stateKey, "tiktok_ads", nowSec);
     const redirectUri = `${c.supabaseUrl}/functions/v1/tiktok-oauth-callback`;
-    return json({ url: tiktokAuthorizationUrl(c.tiktokAppId, redirectUri, state) }, 200, cors);
+    return json({ url: tiktokAuthorizationUrl(app.appId, redirectUri, state) }, 200, cors);
   } catch (e) {
     console.error("tiktok-oauth-start failed:", e instanceof Error ? e.message : e);
     return json({ error: "server_error" }, 500, cors);
@@ -411,11 +425,14 @@ export async function handleTiktokOAuthStart(req: Request, deps: Deps): Promise<
 
 // Callback: TikTok's own top-level redirect after the owner approves or denies. Same shape as
 // Meta's -- no Supabase login reaches here, the signed state is what proves it is real, checked
-// before anything else runs so a forged or expired state cannot trigger so much as a failure write.
+// before anything is written so a forged or expired state cannot trigger so much as a failure write.
 export async function handleTiktokOAuthCallback(req: Request, deps: Deps): Promise<Response> {
   const c = config(deps.env);
   if (req.method !== "GET") return json({ error: "method_not_allowed" }, 405);
-  if (!c.oauthStateSecret || !c.supabaseUrl || !c.serviceKey) return json({ error: "not_configured" }, 503);
+  if (!c.supabaseUrl || !c.serviceKey) return json({ error: "not_configured" }, 503);
+  const app = await loadAdsApp(deps.env, deps.fetch, "tiktok_ads");
+  const stateKey = await oauthStateKey(deps.env);
+  if (!app || !stateKey) return json({ error: "not_configured" }, 503);
 
   const nowSec = Math.floor((deps.now ? deps.now() : Date.now()) / 1000);
   const u = new URL(req.url);
@@ -431,7 +448,7 @@ export async function handleTiktokOAuthCallback(req: Request, deps: Deps): Promi
   };
 
   const state = u.searchParams.get("state");
-  const check = await verifyState(c.oauthStateSecret, "tiktok_ads", state, nowSec);
+  const check = await verifyState(stateKey, "tiktok_ads", state, nowSec);
   if (!check.ok) return backToConsole({ oauth: "tiktok", status: "error", reason: check.reason }); // state itself unproven: do not even record a failure
 
   const tiktokError = u.searchParams.get("error") || u.searchParams.get("error_description");
@@ -440,13 +457,12 @@ export async function handleTiktokOAuthCallback(req: Request, deps: Deps): Promi
   // TikTok's redirect carries both `auth_code` and a redundant `code` with the same value.
   const authCode = u.searchParams.get("auth_code") || u.searchParams.get("code");
   if (!authCode) return fail("no_code");
-  if (!c.tiktokAppId || !c.tiktokAppSecret) return fail("not_configured");
 
   try {
     const tokenRes = await deps.fetch(TIKTOK_TOKEN_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(tiktokTokenExchangeBody(c.tiktokAppId, c.tiktokAppSecret, authCode)),
+      body: JSON.stringify(tiktokTokenExchangeBody(app.appId, app.appSecret, authCode)),
     });
     const tokenBody: { code?: number; message?: string; data?: { access_token?: string; advertiser_ids?: unknown[]; refresh_token?: string } } =
       await tokenRes.json().catch(() => ({}));
@@ -459,13 +475,22 @@ export async function handleTiktokOAuthCallback(req: Request, deps: Deps): Promi
     // and Login Kit tokens, a different product.) Keep a refresh_token only if one is ever sent.
     const refreshToken = tokenBody.data.refresh_token || null;
 
-    const accountId = (tokenBody.data.advertiser_ids || []).map((a) => String(a)).filter(Boolean).join(",");
+    // Every advertiser the authorization reaches. A list to choose from, never the choice (see Meta's callback).
+    const ids = [...new Set((tokenBody.data.advertiser_ids || []).map((a) => String(a)).filter(Boolean))];
+    // Names are best-effort: the connection is just as good without them.
+    const names = new Map<string, string | null>();
+    if (ids.length > 0) {
+      try {
+        for (const a of await tiktokAdvertisers(deps.fetch, app.appId, app.appSecret, tokenBody.data.access_token)) names.set(a.id, a.name);
+      } catch (e) { console.error("could not read advertiser names (connection still saved):", e instanceof Error ? e.message : e); }
+    }
 
     await rpc(c, deps.fetch, "apply_oauth_connection", {
       p_provider: "tiktok_ads",
       p_access_token: tokenBody.data.access_token,
-      p_account_id: accountId,
+      p_account_id: ids.join(","),
       p_refresh_token: refreshToken,
+      p_details: { ad_accounts: ids.map((id) => ({ id, name: names.get(id) ?? null })) },
     });
     return backToConsole({ oauth: "tiktok", status: "connected" });
   } catch (e) {
@@ -487,12 +512,14 @@ export async function handleGoogleAdsOAuthStart(req: Request, deps: Deps): Promi
 
   try {
     if (!(await callerIsOwner(c, deps.fetch, authHeader))) return json({ error: "forbidden" }, 403, cors);
-    if (!c.googleClientId || !c.oauthStateSecret) return json({ error: "not_configured" }, 503, cors);
+    const app = await loadAdsApp(deps.env, deps.fetch, "google_ads");
+    const stateKey = await oauthStateKey(deps.env);
+    if (!app || !stateKey) return json({ error: "not_configured" }, 503, cors);
 
     const nowSec = Math.floor((deps.now ? deps.now() : Date.now()) / 1000);
-    const state = await signState(c.oauthStateSecret, "google_ads", nowSec);
+    const state = await signState(stateKey, "google_ads", nowSec);
     const redirectUri = `${c.supabaseUrl}/functions/v1/google-ads-oauth-callback`;
-    return json({ url: googleAuthorizationUrl(c.googleClientId, redirectUri, state) }, 200, cors);
+    return json({ url: googleAuthorizationUrl(app.appId, redirectUri, state) }, 200, cors);
   } catch (e) {
     console.error("google-ads-oauth-start failed:", e instanceof Error ? e.message : e);
     return json({ error: "server_error" }, 500, cors);
@@ -501,11 +528,14 @@ export async function handleGoogleAdsOAuthStart(req: Request, deps: Deps): Promi
 
 // Callback: Google's own top-level redirect after the owner approves or denies. Same guarantees as Meta's
 // and TikTok's -- no Supabase login reaches here, the signed state is what proves it is real, checked
-// before anything else runs so a forged or expired state cannot trigger so much as a failure write.
+// before anything is written so a forged or expired state cannot trigger so much as a failure write.
 export async function handleGoogleAdsOAuthCallback(req: Request, deps: Deps): Promise<Response> {
   const c = config(deps.env);
   if (req.method !== "GET") return json({ error: "method_not_allowed" }, 405);
-  if (!c.oauthStateSecret || !c.supabaseUrl || !c.serviceKey) return json({ error: "not_configured" }, 503);
+  if (!c.supabaseUrl || !c.serviceKey) return json({ error: "not_configured" }, 503);
+  const app = await loadAdsApp(deps.env, deps.fetch, "google_ads");
+  const stateKey = await oauthStateKey(deps.env);
+  if (!app || !stateKey) return json({ error: "not_configured" }, 503);
 
   const nowSec = Math.floor((deps.now ? deps.now() : Date.now()) / 1000);
   const u = new URL(req.url);
@@ -521,7 +551,7 @@ export async function handleGoogleAdsOAuthCallback(req: Request, deps: Deps): Pr
   };
 
   const state = u.searchParams.get("state");
-  const check = await verifyState(c.oauthStateSecret, "google_ads", state, nowSec);
+  const check = await verifyState(stateKey, "google_ads", state, nowSec);
   if (!check.ok) return backToConsole({ oauth: "google", status: "error", reason: check.reason }); // state itself unproven: do not even record a failure
 
   const googleError = u.searchParams.get("error");
@@ -529,14 +559,13 @@ export async function handleGoogleAdsOAuthCallback(req: Request, deps: Deps): Pr
 
   const code = u.searchParams.get("code");
   if (!code) return fail("no_code");
-  if (!c.googleClientId || !c.googleClientSecret) return fail("not_configured");
 
   try {
     const redirectUri = `${c.supabaseUrl}/functions/v1/google-ads-oauth-callback`;
     const tokenRes = await deps.fetch(GOOGLE_TOKEN_URL, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: googleTokenExchangeBody(c.googleClientId, c.googleClientSecret, redirectUri, code),
+      body: googleTokenExchangeBody(app.appId, app.appSecret, redirectUri, code),
     });
     const tokenBody: { access_token?: string; refresh_token?: string; error?: string; error_description?: string } =
       await tokenRes.json().catch(() => ({}));
@@ -549,21 +578,21 @@ export async function handleGoogleAdsOAuthCallback(req: Request, deps: Deps): Pr
     const refreshToken = tokenBody.refresh_token;
     if (!refreshToken) return fail("Google no entrego el permiso de renovacion. Quita esta app en myaccount.google.com/permissions y vuelve a conectar.");
 
-    // Best-effort, like Meta's ad-account lookup: a missing or unapproved access level makes this call fail
-    // for reasons the owner cannot fix from here, and that must not undo a perfectly good connection.
-    let accountId = "";
+    // Best-effort, like Meta's ad-account lookup: a Cloud project without API access yet makes this call fail
+    // for reasons the owner cannot fix from here, and that must not undo a perfectly good connection. The
+    // ads worker reads the list again on every run, so it fills in once access is granted.
+    let adAccounts: AdAccount[] | null = null;
     try {
-      const headers: Record<string, string> = { Authorization: `Bearer ${tokenBody.access_token}` };
-      if (c.googleDeveloperToken) headers["developer-token"] = c.googleDeveloperToken;
-      const acctRes = await deps.fetch(GOOGLE_ACCESSIBLE_CUSTOMERS_URL, { headers });
-      const acctBody: { resourceNames?: string[] } = await acctRes.json().catch(() => ({}));
-      if (acctRes.ok) {
-        accountId = (acctBody.resourceNames || []).map((r) => String(r).replace(/^customers\//, "")).filter(Boolean).join(",");
-      }
+      adAccounts = await googleAccessibleAccounts(deps.fetch, { accessToken: tokenBody.access_token, developerToken: c.googleDeveloperToken });
     } catch (e) { console.error("could not list Google Ads accounts (connection still saved):", e instanceof Error ? e.message : e); }
 
     // p_access_token is the column's name for "the credential to keep"; for Google that is the refresh token.
-    await rpc(c, deps.fetch, "apply_oauth_connection", { p_provider: "google_ads", p_access_token: refreshToken, p_account_id: accountId });
+    // p_account_id lists every reachable account, never the choice (see Meta's callback).
+    await rpc(c, deps.fetch, "apply_oauth_connection", {
+      p_provider: "google_ads", p_access_token: refreshToken,
+      p_account_id: (adAccounts || []).map((a) => a.id).join(","),
+      p_details: adAccounts ? { ad_accounts: adAccounts } : {},
+    });
     return backToConsole({ oauth: "google", status: "connected" });
   } catch (e) {
     return fail(e instanceof Error ? e.message : String(e));

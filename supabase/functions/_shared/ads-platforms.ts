@@ -1,7 +1,7 @@
 // Talking to Meta, TikTok and Google Ads: list campaigns with lifetime numbers, and pause / resume / end
 // one. Every network call goes through the injected fetch, so tests can stand in for each platform.
 import {
-  AdsError, META_GRAPH, TIKTOK_API, GOOGLE_ADS_API, GOOGLE_CAMPAIGNS_QUERY,
+  AdsError, META_GRAPH, TIKTOK_API, GOOGLE_ADS_API, GOOGLE_CAMPAIGNS_QUERY, GOOGLE_CUSTOMER_NAME_QUERY,
   metaCampaignsUrl, metaInsightsUrl, metaToCampaigns, metaError, metaStatusValue,
   metaObjectStorySpec, metaAdsetParams,
   tiktokCampaignsUrl, tiktokReportUrl, tiktokToCampaigns, tiktokError, tiktokStatusValue,
@@ -13,7 +13,7 @@ import type {
   GoogleSearchRow, LaunchSpec, MetaCampaignRow, MetaInsightRow, PlatformCampaign, StatusAction,
   TiktokCampaignRow, TiktokIdentity, TiktokReportRow,
 } from "./ads-lib.ts";
-import { GOOGLE_TOKEN_URL } from "./oauth-lib.ts";
+import { GOOGLE_ACCESSIBLE_CUSTOMERS_URL, GOOGLE_TOKEN_URL, metaAdAccountsUrl, metaPagesUrl } from "./oauth-lib.ts";
 
 // More pages than a restaurant will ever have; a bound so a platform bug cannot loop forever.
 const MAX_PAGES = 10;
@@ -49,6 +49,30 @@ export async function metaListCampaigns(fetchFn: typeof fetch, token: string, ac
   const campaigns = await metaPaged<MetaCampaignRow>(fetchFn, metaCampaignsUrl(token, accountId));
   const insights = await metaPaged<MetaInsightRow>(fetchFn, metaInsightsUrl(token, accountId));
   return metaToCampaigns(accountId, campaigns, insights);
+}
+
+// ------------------------------------------------------------- what a login can reach ---
+// The ad accounts and Pages a login reaches, with names, recorded when a platform is connected and read again on
+// every worker run (integrations.details.ad_accounts / .pages), so the owner can pick Go Picadera's in Canales.
+export interface AdAccount { id: string; name: string | null }
+export interface MetaPage { id: string; name: string | null; instagram: { id: string; username: string | null } | null }
+
+export async function metaAdAccounts(fetchFn: typeof fetch, token: string): Promise<AdAccount[]> {
+  const rows = await metaPaged<{ account_id?: string | number; name?: string }>(fetchFn, metaAdAccountsUrl(token));
+  return rows.filter((a) => a.account_id != null && String(a.account_id) !== "").map((a) => ({ id: String(a.account_id), name: a.name ?? null }));
+}
+
+/** The Pages a login can advertise as, each with the Instagram professional account linked to it. */
+export async function metaPages(fetchFn: typeof fetch, token: string): Promise<MetaPage[]> {
+  type Row = { id?: string | number; name?: string; instagram_business_account?: { id?: string | number; username?: string } };
+  const rows = await metaPaged<Row>(fetchFn, metaPagesUrl(token));
+  return rows.filter((p) => p.id != null && String(p.id) !== "").map((p) => ({
+    id: String(p.id),
+    name: p.name ?? null,
+    instagram: p.instagram_business_account?.id != null
+      ? { id: String(p.instagram_business_account.id), username: p.instagram_business_account.username ?? null }
+      : null,
+  }));
 }
 
 export async function metaSetStatus(fetchFn: typeof fetch, token: string, campaignId: string, action: StatusAction): Promise<void> {
@@ -88,6 +112,15 @@ export async function tiktokListCampaigns(fetchFn: typeof fetch, token: string, 
   return tiktokToCampaigns(advertiserId, campaigns, report);
 }
 
+/** The advertisers this app's authorization reaches, with names. TikTok wants the app's own id and secret here. */
+export async function tiktokAdvertisers(fetchFn: typeof fetch, appId: string, appSecret: string, token: string): Promise<AdAccount[]> {
+  const u = new URL(`${TIKTOK_API}/oauth2/advertiser/get/`);
+  u.searchParams.set("app_id", appId);
+  u.searchParams.set("secret", appSecret);
+  const data = await tiktokCall<{ list?: { advertiser_id?: string | number; advertiser_name?: string }[] }>(fetchFn, token, u.toString());
+  return (data?.list || []).filter((a) => a.advertiser_id != null).map((a) => ({ id: String(a.advertiser_id), name: a.advertiser_name ?? null }));
+}
+
 export async function tiktokSetStatus(fetchFn: typeof fetch, token: string, advertiserId: string, campaignId: string, action: StatusAction): Promise<void> {
   await tiktokCall(fetchFn, token, `${TIKTOK_API}/campaign/status/update/`, {
     method: "POST",
@@ -113,15 +146,14 @@ export async function googleMintAccessToken(fetchFn: typeof fetch, clientId: str
   throw new AdsError("config", `Google: ${b?.error_description || b?.error || `HTTP ${status}`}`);
 }
 
+// Developer tokens were sunset on 2026-09-09: access now comes from the Google Cloud project that owns the OAuth
+// client, and a token that is sent is ignored. It is sent only when one is set.
 function googleHeaders(auth: GoogleAuth): Record<string, string> {
-  if (!auth.developerToken) {
-    throw new AdsError("config", "Google Ads: falta GOOGLE_ADS_DEVELOPER_TOKEN (cuenta de administrador, nivel Explorer o más)");
-  }
   const h: Record<string, string> = {
     Authorization: `Bearer ${auth.accessToken}`,
-    "developer-token": auth.developerToken,
     "Content-Type": "application/json",
   };
+  if (auth.developerToken) h["developer-token"] = auth.developerToken;
   if (auth.loginCustomerId) h["login-customer-id"] = auth.loginCustomerId;
   return h;
 }
@@ -131,6 +163,41 @@ async function googlePost<T>(fetchFn: typeof fetch, auth: GoogleAuth, url: strin
   const err = googleError(body, status);
   if (err) throw err;
   return body as T;
+}
+
+// More than one restaurant's worth; a bound on the extra calls a login with many accounts costs.
+export const GOOGLE_NAME_LOOKUPS = 20;
+
+async function googleCustomerName(fetchFn: typeof fetch, auth: GoogleAuth, customerId: string): Promise<string | null> {
+  const body = await googlePost<{ results?: { customer?: { descriptiveName?: string } }[] }>(
+    fetchFn, auth, `${GOOGLE_ADS_API}/customers/${customerId}/googleAds:search`, { query: GOOGLE_CUSTOMER_NAME_QUERY },
+  );
+  return body.results?.[0]?.customer?.descriptiveName || null;
+}
+
+/**
+ * The customer ids this login reaches directly (listAccessibleCustomers), each with its name. Names are
+ * best-effort: one lookup per account whose name is not already known, at most GOOGLE_NAME_LOOKUPS, and a
+ * failed lookup leaves the name null. Only the list itself can fail.
+ */
+export async function googleAccessibleAccounts(
+  fetchFn: typeof fetch, auth: Pick<GoogleAuth, "accessToken" | "developerToken">, known: AdAccount[] = [],
+): Promise<AdAccount[]> {
+  // Directly accessible accounts need no login-customer-id, and naming a manager there would be wrong for them.
+  const direct: GoogleAuth = { accessToken: auth.accessToken, developerToken: auth.developerToken, loginCustomerId: "" };
+  const headers = googleHeaders(direct);
+  delete headers["Content-Type"];
+  const { status, body } = await send(fetchFn, "Google", GOOGLE_ACCESSIBLE_CUSTOMERS_URL, { headers });
+  const err = googleError(body, status);
+  if (err) throw err;
+  const ids = [...new Set(((body as { resourceNames?: string[] } | null)?.resourceNames || [])
+    .map((r) => String(r).replace(/^customers\//, "")).filter(Boolean))];
+
+  const knownNames = new Map(known.filter((a) => a.name).map((a) => [a.id, a.name as string]));
+  const toLookUp = ids.filter((id) => !knownNames.has(id)).slice(0, GOOGLE_NAME_LOOKUPS);
+  const found = await Promise.all(toLookUp.map((id) => googleCustomerName(fetchFn, direct, id).catch(() => null)));
+  toLookUp.forEach((id, i) => { if (found[i]) knownNames.set(id, found[i]!); });
+  return ids.map((id) => ({ id, name: knownNames.get(id) ?? null }));
 }
 
 export async function googleListCampaigns(fetchFn: typeof fetch, auth: GoogleAuth, customerId: string): Promise<PlatformCampaign[]> {

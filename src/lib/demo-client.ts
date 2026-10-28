@@ -273,6 +273,50 @@ export function demoClient() {
       },
     },
 
+    /**
+     * The two database functions Canales calls for the ad platforms, applied to the in-memory rows with the
+     * same rules as backend/ads_accounts.sql, so saving an app or choosing an account visibly takes.
+     */
+    async rpc(name: string, args: Row) {
+      await new Promise((r) => setTimeout(r, 200));
+      const integration = (store.integrations ?? []).find((r) => r.provider === args.p_provider);
+      if (name === "set_ads_app") {
+        const app = (store.ads_apps ?? []).find((r) => r.provider === args.p_provider);
+        const id = String(args.p_app_id ?? "").trim();
+        if (!app || !id) return { data: null, error: { message: "Falta el ID de la app." } };
+        // A different app: the saved permission belonged to the old one.
+        if (app.app_id && app.app_id !== id && integration) {
+          Object.assign(integration, { status: "disconnected", has_secret: false, store_id: null, details: {}, last_error: null });
+        }
+        Object.assign(app, {
+          app_id: id,
+          login_config_id: args.p_provider === "meta_ads" ? (String(args.p_login_config_id ?? "").trim() || null) : null,
+          has_secret: Boolean(app.has_secret) || !!String(args.p_app_secret ?? "").trim(),
+        });
+        return { data: null, error: null };
+      }
+      if (name === "choose_ads_account") {
+        const details = (integration?.details ?? {}) as { ad_accounts?: { id: string }[]; pages?: { id: string }[] };
+        if (!integration || !(details.ad_accounts ?? []).some((a) => a.id === args.p_account_id)) {
+          return { data: null, error: { message: "Esa cuenta publicitaria no esta entre las que ve esta conexion." } };
+        }
+        const meta = args.p_provider === "meta_ads";
+        if (meta && !(details.pages ?? []).some((p) => p.id === args.p_page_id)) {
+          return { data: null, error: { message: "Elige tambien la Pagina de Facebook con la que salen los anuncios." } };
+        }
+        // Imports from any other account leave Promoción; campaigns written here stay.
+        store.campaigns = (store.campaigns ?? []).filter((c) =>
+          !(c.provider === args.p_provider && c.origin === "platform" && c.account_id !== args.p_account_id));
+        Object.assign(integration, {
+          store_id: args.p_account_id,
+          details: { ...details, chosen_at: new Date().toISOString(), ...(meta ? { page_id: args.p_page_id } : {}) },
+          last_error: String(integration.last_error ?? "").startsWith("Elige la cuenta publicitaria") ? null : integration.last_error,
+        });
+        return { data: null, error: null };
+      }
+      return { data: null, error: { message: `demo: no rpc stub for "${name}"` } };
+    },
+
     // Edge Functions, faked for the one the console calls: the read-only Stripe status
     // card on Integrations. The demo has no real Stripe project behind it, so it always
     // reports "not configured" — true, and it exercises the same code path as production.

@@ -30,7 +30,7 @@ export interface PlatformCampaign {
 // What the worker does about a failure depends only on its kind:
 //   auth       the connection is dead -- mark it "Con problema", the owner reconnects
 //   transient  rate limit or platform hiccup -- leave the job for the next run
-//   config     something only Fellito can fix (a missing developer token, a missing Page)
+//   config     setup, not this request (no account or Page chosen, a Cloud project without API access)
 //   platform   the platform refused this particular request -- record why, stop retrying
 export type AdsErrorKind = "auth" | "transient" | "config" | "platform";
 
@@ -196,6 +196,9 @@ export function googleStatus(s: string | undefined): CampaignStatus {
   return v === "ENABLED" ? "active" : v === "REMOVED" ? "ended" : "paused";
 }
 
+/** An account's own name, shown next to its id when the owner picks Go Picadera's account in Canales. */
+export const GOOGLE_CUSTOMER_NAME_QUERY = "SELECT customer.descriptive_name FROM customer";
+
 // No date segment: lifetime totals. Removed campaigns are left out -- they cannot come back.
 export const GOOGLE_CAMPAIGNS_QUERY =
   "SELECT campaign.id, campaign.name, campaign.status, campaign_budget.amount_micros, " +
@@ -236,6 +239,11 @@ export function googleStatusOperation(customerId: string, campaignId: string, ac
   return { update: { resourceName, status: action === "pause" ? "PAUSED" : "ENABLED" }, updateMask: "status" };
 }
 
+// Since September 2026 access levels belong to the Google Cloud project that owns the OAuth client, not to a
+// developer token. A project still at Test access is refused on real accounts with this code (v25+).
+export const GOOGLE_PROJECT_ACCESS_MESSAGE =
+  "El proyecto de Google Cloud aún no tiene acceso Explorer a la API de Google Ads; pídelo en Google Cloud Console → Google Ads API.";
+
 /** Google errors: { error: { code, status, message, details: [{ errors: [{ errorCode, message }] }] } }. */
 export function googleError(body: unknown, status: number): AdsError | null {
   if (status < 400) return null;
@@ -243,6 +251,16 @@ export function googleError(body: unknown, status: number): AdsError | null {
   const inner = e?.details?.flatMap((d) => d.errors || [])[0];
   const msg = inner?.message || e?.message || `HTTP ${status}`;
   const codes = JSON.stringify(inner?.errorCode || {});
+  if (/CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION/.test(codes) || /CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION/.test(msg)) {
+    return new AdsError("config", GOOGLE_PROJECT_ACCESS_MESSAGE);
+  }
+  // Google's known issue: projects upgraded after 2026-09-09 may get the generic AUTHORIZATION_ERROR until its fix
+  // rolls out. Only when the message is plainly about the project's access is it the same problem; any other
+  // AUTHORIZATION_ERROR keeps the classification below.
+  if (/"AUTHORIZATION_ERROR"/.test(codes) && /project/i.test(msg) && /(access|approv|level|production)/i.test(msg)) {
+    return new AdsError("config", GOOGLE_PROJECT_ACCESS_MESSAGE);
+  }
+  // Developer tokens were sunset on 2026-09-09 and one that is sent is ignored; kept for a token Google still rejects.
   if (/DEVELOPER_TOKEN/.test(codes) || /developer token/i.test(msg)) return new AdsError("config", `Google Ads: ${msg}`);
   if (status === 401 || e?.status === "UNAUTHENTICATED") return new AdsError("auth", `Google Ads pide reconectar: ${msg}`);
   if (status === 403 || e?.status === "PERMISSION_DENIED") return new AdsError("auth", `Google Ads no dio permiso: ${msg}`);

@@ -15,7 +15,10 @@
  * answers with a reason on the campaign.
  */
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { browserClient } from "@/lib/supabase-browser";
+import { chosenAdAccount } from "@/lib/ads-choice";
+import type { AdsDetails } from "@/lib/ads-choice";
 import { useSession, isOwner } from "@/lib/session";
 import { useQuery } from "@/lib/useQuery";
 import NewCampaignForm from "./NewCampaignForm";
@@ -76,6 +79,8 @@ type Campaign = {
 type Connection = {
   provider: Provider;
   status: "disconnected" | "pending" | "connected" | "error";
+  store_id: string | null;
+  details: AdsDetails | null;
   last_error: string | null;
 };
 
@@ -119,8 +124,14 @@ export default function PromoPage() {
   // Warnings the ads worker left on a connection: a Meta login about to lapse, a revoked Google
   // permission. Staff get no rows here (RLS), which is right -- reconnecting is the owner's job.
   const connections = useQuery<Connection[]>(
-    (sb) => sb.from("integrations").select("provider, status, last_error").eq("kind", "ads") as never,
+    (sb) => sb.from("integrations").select("provider, status, store_id, details, last_error").eq("kind", "ads") as never,
   );
+  // A connected platform with no ad account chosen in Canales: the worker would refuse a launch or a sync, so
+  // the buttons that queue one point to Canales instead.
+  const needsAccount = (p: Provider) => {
+    const x = (connections.data ?? []).find((c) => c.provider === p);
+    return !!x && (x.status === "connected" || x.status === "error") && !chosenAdAccount(x.store_id, x.details);
+  };
 
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
@@ -320,7 +331,14 @@ export default function PromoPage() {
 
               {owner && (
                 <div className="flex gap-2 flex-wrap">
-                  {c.status !== "active" && c.status !== "publishing" && (
+                  {needsAccount(c.provider) && c.status !== "active" && c.status !== "publishing" && (
+                    <Link href="/integrations/"
+                          className="px-3 py-1.5 rounded-full text-xs font-bold"
+                          style={{ background: "var(--surface-3)", color: "var(--yellow)" }}>
+                      Elige la cuenta en Canales
+                    </Link>
+                  )}
+                  {!needsAccount(c.provider) && c.status !== "active" && c.status !== "publishing" && (
                     <button onClick={() => launch(c)} disabled={busy}
                             className="px-3 py-1.5 rounded-full text-xs font-bold disabled:opacity-50"
                             style={{ background: "var(--yellow)", color: "#0A0B0E" }}>
@@ -334,7 +352,7 @@ export default function PromoPage() {
                       Pausar
                     </button>
                   )}
-                  {c.external_id && (
+                  {c.external_id && !needsAccount(c.provider) && (
                     <button onClick={() => requestSync(c)} disabled={busy}
                             className="px-3 py-1.5 rounded-full text-xs font-bold disabled:opacity-50"
                             style={{ background: "var(--surface-3)", color: "var(--muted)" }}>

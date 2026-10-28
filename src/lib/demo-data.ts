@@ -9,6 +9,7 @@
 const now = Date.now();
 const minsAgo = (m: number) => new Date(now - m * 60_000).toISOString();
 const daysAgo = (d: number) => new Date(now - d * 864e5).toISOString();
+const daysAhead = (d: number) => new Date(now + d * 864e5).toISOString();
 
 export type Table = keyof typeof seed;
 
@@ -147,10 +148,28 @@ export const seed = {
     { kind: "pos", provider: "square",     status: "connected",    store_id: "SQ-BK-4820", client_id: "sq0idp-91x", has_secret: true,  last_order_at: minsAgo(23), last_error: null, auto_accept: false },
     { kind: "pos", provider: "clover",     status: "disconnected", store_id: null,         client_id: null,         has_secret: false, last_order_at: null,        last_error: null, auto_accept: false },
     { kind: "pos", provider: "toast",      status: "disconnected", store_id: null,         client_id: null,         has_secret: false, last_order_at: null,        last_error: null, auto_accept: false },
-    { kind: "ads", provider: "meta_ads",   status: "connected",    store_id: "act_88231", client_id: "meta_1120", has_secret: true,  last_order_at: minsAgo(52), last_error: null, auto_accept: false },
-    { kind: "ads", provider: "google_ads", status: "pending",      store_id: null,        client_id: null,        has_secret: false, last_order_at: null,        last_error: null, auto_accept: false },
+    // The login that connected reaches more than Go Picadera's ad accounts and Pages; Meta shows a choice
+    // already made, Google one still waiting for the owner (so the demo shows both states of the selects).
+    { kind: "ads", provider: "meta_ads",   status: "connected",    store_id: "1029384756", client_id: null, has_secret: true,  last_order_at: null, last_error: null, auto_accept: false,
+      details: {
+        ad_accounts: [{ id: "1029384756", name: "Go Picadera" }, { id: "5566778899", name: "Cuenta de pruebas" }],
+        pages: [
+          { id: "104455667788", name: "Go Picadera", instagram: { id: "17841400000000001", username: "gopicadera" } },
+          { id: "109988776655", name: "Página de pruebas", instagram: null },
+        ],
+        page_id: "104455667788", chosen_at: daysAgo(3), token_expires_at: daysAhead(48),
+      } },
+    { kind: "ads", provider: "google_ads", status: "connected",    store_id: null,        client_id: null,        has_secret: true,  last_order_at: null,        last_error: "Elige la cuenta publicitaria de Go Picadera en Canales", auto_accept: false,
+      details: { ad_accounts: [{ id: "1234567890", name: "Go Picadera" }, { id: "9876543210", name: "Cuenta de pruebas" }] } },
     { kind: "ads", provider: "tiktok_ads", status: "disconnected", store_id: null,        client_id: null,        has_secret: false, last_order_at: null,        last_error: null, auto_accept: false },
     { kind: "pos", provider: "lightspeed", status: "disconnected", store_id: null,         client_id: null,         has_secret: false, last_order_at: null,        last_error: null, auto_accept: false },
+  ] as Record<string, unknown>[],
+
+  // Each ad platform's app, as Canales reads it: never the secret, only whether one is saved.
+  ads_apps: [
+    { provider: "meta_ads",   app_id: "1234567890123456", login_config_id: null, has_secret: true },
+    { provider: "google_ads", app_id: "123456789012-demo.apps.googleusercontent.com", login_config_id: null, has_secret: true },
+    { provider: "tiktok_ads", app_id: null, login_config_id: null, has_secret: false },
   ] as Record<string, unknown>[],
 
   categories: [
@@ -176,19 +195,19 @@ export const seed = {
   campaign_jobs: [] as Record<string, unknown>[],
 
   campaigns: [
-    { id: "cp1", provider: "meta_ads", name: "Fin de semana · Mofongo", status: "active",
+    { id: "cp1", provider: "meta_ads", name: "Fin de semana · Mofongo", status: "active", origin: "console", account_id: "1029384756",
       headline: "Mofongo con pernil, $14 este fin de semana",
       body: "Hecho al momento en la 4ta Avenida. Pide por WhatsApp o pasa por la tienda.",
       daily_budget: 15, spend: 84.2, impressions: 18420, clicks: 612, orders: 23,
       external_id: "23851174", last_error: null, synced_at: minsAgo(52),
       starts_at: daysAgo(6), ends_at: null, created_at: daysAgo(6) },
-    { id: "cp2", provider: "meta_ads", name: "Empanadas 2x1 · martes", status: "paused",
+    { id: "cp2", provider: "meta_ads", name: "Empanadas 2x1 · martes", status: "paused", origin: "console", account_id: "1029384756",
       headline: "Martes de empanadas: 2x1 todo el día",
       body: "Pollo, carne o queso. Solo los martes.",
       daily_budget: 8, spend: 41.6, impressions: 9130, clicks: 288, orders: 11,
       external_id: "23849902", last_error: null, synced_at: minsAgo(240),
       starts_at: daysAgo(14), ends_at: daysAgo(2), created_at: daysAgo(14) },
-    { id: "cp3", provider: "google_ads", name: "Búsqueda · comida dominicana Brooklyn", status: "draft",
+    { id: "cp3", provider: "google_ads", name: "Búsqueda · comida dominicana Brooklyn", status: "draft", origin: "console", account_id: null,
       headline: "Comida dominicana en Sunset Park",
       body: "Pernil, mofongo, chicharrón. Abierto hasta las 11pm.",
       daily_budget: 12, spend: 0, impressions: 0, clicks: 0, orders: 0,
