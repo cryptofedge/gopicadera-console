@@ -208,7 +208,7 @@ alter table integrations
 -- Revoking the table privilege also drops any column grants, so a re-run starts
 -- clean and lands on exactly this list.
 revoke select on integrations from anon, authenticated;
-grant select (provider, kind, status, store_id, client_id, has_secret,
+grant select (provider, kind, status, store_id, client_id, has_secret, details,
               last_order_at, last_error, auto_accept, updated_at, updated_by)
   on integrations to authenticated;
 
@@ -222,8 +222,8 @@ set search_path = public
 as $$
 begin
   if new.status = 'disconnected' then
-    -- jsonb_populate_record ignores refresh_token if ads_oauth.sql has not added it yet.
-    new := jsonb_populate_record(new, '{"client_secret": null, "refresh_token": null}'::jsonb);
+    -- details describe the old login (its Pages, its expiry), so they go too.
+    new := jsonb_populate_record(new, '{"client_secret": null, "refresh_token": null, "details": {}}'::jsonb);
   end if;
   return new;
 end;

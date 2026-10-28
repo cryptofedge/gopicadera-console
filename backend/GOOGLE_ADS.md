@@ -1,8 +1,7 @@
 # Connecting Google Ads
 
-Status (2026-10-07): code written and tested (`node ops/stripe-functions.test.mjs`, 204 checks), built clean from
-`origin/master`. Until it is merged, deployed, and Google credentials exist, there is nothing for anyone to click.
-Same shape as [META_ADS.md](META_ADS.md) and [TIKTOK_ADS.md](TIKTOK_ADS.md); read Meta's first.
+Status (2026-10-28): merged and deployed; no Google credentials exist yet. Same shape as [META_ADS.md](META_ADS.md)
+and [TIKTOK_ADS.md](TIKTOK_ADS.md); read Meta's first. Tests: `npm run test:functions`. Live check: `npm run check:connect`.
 
 ## How it works
 
@@ -29,11 +28,15 @@ Same shape as [META_ADS.md](META_ADS.md) and [TIKTOK_ADS.md](TIKTOK_ADS.md); rea
   `customers:listAccessibleCustomers` and stores the customer ids (comma-joined, without the `customers/` prefix) in
   `store_id`. If that call is refused, the connection is still saved with no account id. Accounts reachable only through
   a manager account may not be listed (Google's docs say the call returns directly accessible customers).
-- **The developer token is optional.** Google moved Ads API access levels from the developer token onto the Google Cloud
-  project in September 2026 and its docs do not say whether the `developer-token` header is still read. The function sends
-  it only if `GOOGLE_ADS_DEVELOPER_TOKEN` is set, and nothing depends on it.
-- The API version is pinned (`oauth-lib.ts`, `GOOGLE_ADS_API_VERSION = "v25"`, current in October 2026; 25.1 and 25.2
-  are additive minor releases). Google retires old versions on a schedule, so bump it deliberately.
+- **A developer token is needed for anything beyond connecting.** Every Ads API call (reading campaigns, pausing,
+  creating) sends a `developer-token` header from a Google Ads **manager** account's API Center, at **Explorer** level or
+  higher; Test level cannot touch real accounts. Set it as `GOOGLE_ADS_DEVELOPER_TOKEN`. If access to the restaurant's
+  account goes through that manager account, also set `GOOGLE_ADS_LOGIN_CUSTOMER_ID` (10 digits, no dashes). The
+  connect step itself only sends the token when it is set, and works without it.
+- **Who connects:** Fellito, once Llulisa has added his Google account as an Admin of her Google Ads account. His
+  Google Cloud project hosts the OAuth client; nothing there needs to belong to her.
+- The API version is pinned (`oauth-lib.ts`, `GOOGLE_ADS_API_VERSION = "v26"`, released 2026-10-14). Google retires
+  old versions on a schedule, so bump it deliberately.
 
 ## Files
 

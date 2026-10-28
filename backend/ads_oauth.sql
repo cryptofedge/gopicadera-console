@@ -25,18 +25,26 @@ update integrations
    and refresh_token is null
    and client_id is not null;
 
+-- What the ads work needs to know about a connection that is not a secret: for Meta, the Pages the
+-- login can advertise as, the Instagram account linked to each, and when the token stops working.
+-- Readable by the owner's browser (see security_hardening.sql), so the console can warn before expiry.
+alter table integrations add column if not exists details jsonb not null default '{}'::jsonb;
+
 -- Postgres treats a different argument count as a different, overloaded function even with a
--- default on the new one -- it will not just extend the original. Drop the original 3-arg version
--- first so there is only ever one `apply_oauth_connection`, never two ambiguous overloads.
+-- default on the new one -- it will not just extend the original. Drop every earlier version first
+-- so there is only ever one `apply_oauth_connection`, never two ambiguous overloads.
 drop function if exists apply_oauth_connection(integration_provider, text, text);
+drop function if exists apply_oauth_connection(integration_provider, text, text, text);
 
 create or replace function apply_oauth_connection(
   p_provider integration_provider,
   p_access_token text,
   p_account_id text,
-  -- TikTok's access token expires every 24h and needs this to get a new one; Meta has nothing
-  -- like it (its long-lived token is used directly), so this stays null for meta_ads.
-  p_refresh_token text default null
+  -- Only kept if a platform sends one. TikTok's advertiser token is long-term and normally has none;
+  -- Meta has nothing like it; Google's durable credential arrives as p_access_token.
+  p_refresh_token text default null,
+  -- Non-secret facts about the connection; replaces whatever an earlier connection left.
+  p_details jsonb default null
 ) returns void
 language plpgsql security definer set search_path = public as $$
 begin
@@ -54,6 +62,7 @@ begin
          refresh_token = nullif(trim(coalesce(p_refresh_token, '')), ''),
          -- no OAuth provider has a client id of its own; clears anything left by the old version
          client_id     = null,
+         details       = coalesce(p_details, '{}'::jsonb),
          status        = 'connected',
          last_error    = null,
          updated_at    = now()
@@ -65,8 +74,8 @@ begin
 end;
 $$;
 
-revoke all on function apply_oauth_connection(integration_provider, text, text, text) from public, anon, authenticated;
-grant execute on function apply_oauth_connection(integration_provider, text, text, text) to service_role;
+revoke all on function apply_oauth_connection(integration_provider, text, text, text, jsonb) from public, anon, authenticated;
+grant execute on function apply_oauth_connection(integration_provider, text, text, text, jsonb) to service_role;
 
 -- A failed or abandoned OAuth attempt (denied consent, Meta/TikTok error, token exchange failure)
 -- is recorded here too, so the card can show *why* without ever having written a token.

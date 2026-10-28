@@ -42,15 +42,27 @@ export async function verifyState(secret: string, provider: string, state: strin
 // ---------------------------------------------------------- Meta (Facebook Marketing API) ----
 // Graph API version pinned on purpose: Meta deprecates versions on a schedule, and an
 // unpinned "latest" call would change behaviour out from under this integration with no warning.
-export const META_GRAPH_VERSION = "v21.0";
-export const META_SCOPES = "ads_management,ads_read";
+// v26.0 was current in October 2026 (v21.0's Marketing API sunset was 2025-09-09).
+export const META_GRAPH_VERSION = "v26.0";
 
-export function metaAuthorizationUrl(appId: string, redirectUri: string, state: string): string {
+// Everything the ads work will ever need, asked for once so nobody has to reconnect later:
+// reading and managing ads, and finding the restaurant's Page and its linked Instagram account,
+// which a creative must name to run on Facebook and Instagram.
+export const META_SCOPES = [
+  "ads_management", "ads_read",
+  "pages_show_list", "pages_read_engagement", "pages_manage_ads",
+  "business_management", "instagram_basic",
+].join(",");
+
+// Apps set up with "Facebook Login for Business" can define the permissions as a configuration in
+// the app dashboard and pass its id instead of a scope list. When one is configured, use it.
+export function metaAuthorizationUrl(appId: string, redirectUri: string, state: string, configId = ""): string {
   const u = new URL(`https://www.facebook.com/${META_GRAPH_VERSION}/dialog/oauth`);
   u.searchParams.set("client_id", appId);
   u.searchParams.set("redirect_uri", redirectUri);
   u.searchParams.set("state", state);
-  u.searchParams.set("scope", META_SCOPES);
+  if (configId) u.searchParams.set("config_id", configId);
+  else u.searchParams.set("scope", META_SCOPES);
   u.searchParams.set("response_type", "code");
   return u.toString();
 }
@@ -80,6 +92,24 @@ export function metaAdAccountsUrl(accessToken: string): string {
   return u.toString();
 }
 
+// The Pages this login can advertise as, each with the Instagram professional account linked to it.
+// An ad's creative names a Page (and, for Instagram placements, that account).
+export function metaPagesUrl(accessToken: string): string {
+  const u = new URL(`https://graph.facebook.com/${META_GRAPH_VERSION}/me/accounts`);
+  u.searchParams.set("access_token", accessToken);
+  u.searchParams.set("fields", "id,name,instagram_business_account{id,username}");
+  return u.toString();
+}
+
+// When the token stops working. Long-lived user tokens last about 60 days and cannot be renewed
+// server-side, so the console has to warn the owner to reconnect before then.
+export function metaDebugTokenUrl(appId: string, appSecret: string, inputToken: string): string {
+  const u = new URL(`https://graph.facebook.com/${META_GRAPH_VERSION}/debug_token`);
+  u.searchParams.set("input_token", inputToken);
+  u.searchParams.set("access_token", `${appId}|${appSecret}`);
+  return u.toString();
+}
+
 // ---------------------------------------------------------- TikTok (Business/Marketing API) ----
 // TikTok's token endpoint is versioned the same way Meta's Graph API is; pinned for the same reason.
 export const TIKTOK_TOKEN_VERSION = "v1.3";
@@ -101,8 +131,8 @@ export function tiktokTokenExchangeBody(appId: string, appSecret: string, authCo
 
 // ---------------------------------------------------------- Google Ads ----
 // The Ads API is versioned in the URL and Google retires old versions on a schedule, so this is pinned
-// on purpose (v25 was current in October 2026; minor releases such as 25.1 are additive under it).
-export const GOOGLE_ADS_API_VERSION = "v25";
+// on purpose (v26 was released 2026-10-14; minor releases are additive under it).
+export const GOOGLE_ADS_API_VERSION = "v26";
 export const GOOGLE_ADS_SCOPE = "https://www.googleapis.com/auth/adwords";
 export const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 export const GOOGLE_ACCESSIBLE_CUSTOMERS_URL = `https://googleads.googleapis.com/${GOOGLE_ADS_API_VERSION}/customers:listAccessibleCustomers`;
