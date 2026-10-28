@@ -64,10 +64,41 @@ type Campaign = {
   external_id: string | null;
   last_error: string | null;
   synced_at: string | null;
+  // "platform": found in the ad account by the worker, not drafted here.
+  origin: "console" | "platform";
+  account_id: string | null;
+  platform_ids: { campaign?: string } | null;
+  platform_status: string | null;
+};
+
+type Connection = {
+  provider: Provider;
+  status: "disconnected" | "pending" | "connected" | "error";
+  last_error: string | null;
 };
 
 const money = (n: number) => "$" + Number(n ?? 0).toFixed(2);
 const num = (n: number) => Number(n ?? 0).toLocaleString("es-DO");
+
+// The clock time of the last sync. A clock time rather than "5 min ago", which would need the current
+// time during render and would go stale on a screen left open.
+const at = (iso: string) =>
+  new Date(iso).toLocaleString("es-DO", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+
+// Where the owner manages a campaign on the platform itself.
+function platformLink(c: Campaign): string {
+  const id = c.platform_ids?.campaign || c.external_id || "";
+  if (c.provider === "meta_ads") {
+    return `https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=${encodeURIComponent(c.account_id || "")}&selected_campaign_ids=${encodeURIComponent(id)}`;
+  }
+  if (c.provider === "tiktok_ads") return `https://ads.tiktok.com/i18n/perf/campaign?aadvid=${encodeURIComponent(c.account_id || "")}`;
+  return "https://ads.google.com/aw/campaigns";
+}
+
+// How long the page keeps checking for the worker's answer before saying it is still working.
+const POLL_MS = 5000;
+const WATCH_MS = 60_000;
+const POLL_CAP_MS = 3 * 60_000;
 
 const field = {
   background: "var(--ink)",
@@ -84,28 +115,56 @@ export default function PromoPage() {
       sb
         .from("campaigns")
         .select(
-          "id, provider, name, status, headline, body, daily_budget, spend, impressions, clicks, orders, starts_at, ends_at, external_id, last_error, synced_at",
+          "id, provider, name, status, headline, body, daily_budget, spend, impressions, clicks, orders, starts_at, ends_at, external_id, last_error, synced_at, origin, account_id, platform_ids, platform_status",
         )
         .order("created_at", { ascending: false }) as never,
   );
 
+  // Warnings the ads worker left on a connection: a Meta login about to lapse, a revoked Google
+  // permission. Staff get no rows here (RLS), which is right -- reconnecting is the owner's job.
+  const connections = useQuery<Connection[]>(
+    (sb) => sb.from("integrations").select("provider, status, last_error").eq("kind", "ads") as never,
+  );
+
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
+  // Bumped whenever the owner hands the worker something; each bump opens a one-minute watch.
+  const [watchRequest, setWatchRequest] = useState(0);
+  const [stalled, setStalled] = useState(false);
 
-  // A campaign sitting in "publishing" is waiting on the bot, which will finish
-  // out of band. Poll while any of them are, and stop once none are.
+  // Work handed to the ads worker finishes out of band: a launch, a pause, a sync. Check back every
+  // few seconds while something is pending, and stop after three minutes with a note instead of
+  // polling forever (an earlier version polled every 2 s until the page was closed).
   const publishing = (data ?? []).some((c) => c.status === "publishing");
   useEffect(() => {
-    if (!publishing) return;
-    const t = setInterval(reload, 2000);
+    if (!publishing && watchRequest === 0) return;
+    const started = Date.now();
+    const t = setInterval(() => {
+      const elapsed = Date.now() - started;
+      if (elapsed > POLL_CAP_MS) {
+        clearInterval(t);
+        if (publishing) setStalled(true);
+        return;
+      }
+      if (!publishing && elapsed > WATCH_MS) {
+        clearInterval(t);
+        return;
+      }
+      reload();
+    }, POLL_MS);
     return () => clearInterval(t);
-  }, [publishing, reload]);
+  }, [publishing, watchRequest, reload]);
+
+  const watch = () => {
+    setStalled(false);
+    setWatchRequest((n) => n + 1);
+  };
 
   /**
    * Launching goes through "publishing", not straight to "active".
    *
    * The console cannot call Meta or Google itself, so this only records the
-   * intent — a database trigger queues the job and the bot does the work.
+   * intent — a database trigger queues the job and the ads worker does the work.
    * Jumping to "active" would tell the owner the ad is running before anything
    * has been published, and be a lie for as long as the platform took to
    * answer, or forever if it refused.
@@ -117,7 +176,17 @@ export default function PromoPage() {
       .update({ status, last_error: null })
       .eq("id", c.id);
     setBusy(false);
+    watch();
     reload();
+  }
+
+  // Asks the worker for fresh numbers. Re-setting the same status used to be the way, but the queue
+  // trigger ignores a status that did not change, so nothing ever happened.
+  async function requestSync(c: Campaign) {
+    setBusy(true);
+    await browserClient().from("campaign_jobs").insert({ campaign_id: c.id, action: "sync" });
+    setBusy(false);
+    watch();
   }
 
   async function launch(c: Campaign) {
@@ -167,9 +236,22 @@ export default function PromoPage() {
         )}
       </div>
       <p className="text-sm mb-5" style={{ color: "var(--muted)" }}>
-        Anuncios en Facebook, Instagram, Google y TikTok. El asistente escribe
-        el texto; tú decides si sale y con cuánto.
+        Anuncios en Facebook, Instagram, Google y TikTok. Las campañas que hagas
+        en cada plataforma aparecen aquí solas, con lo gastado y los clics.
       </p>
+
+      {(connections.data ?? []).filter((x) => x.last_error).map((x) => (
+        <p key={x.provider} className="text-xs mb-3 px-3 py-2 rounded-lg max-w-2xl" role="alert"
+           style={{ background: "var(--surface)", color: x.status === "error" ? "var(--red)" : "var(--ember)" }}>
+          <strong>{META[x.provider]?.name}:</strong> {x.last_error}
+        </p>
+      ))}
+
+      {stalled && (
+        <p className="text-xs mb-3" style={{ color: "var(--faint)" }}>
+          Sigue procesando en la plataforma. Vuelve a abrir esta página en un rato.
+        </p>
+      )}
 
       {open && owner && (
         <form
@@ -233,6 +315,8 @@ export default function PromoPage() {
 
               <p className="text-xs mb-2" style={{ color: "var(--faint)" }}>
                 {m?.name} · {m?.where} · {money(c.daily_budget)}/día
+                {c.origin === "platform" && <> · creada en {m?.name}</>}
+                {c.synced_at && <> · cifras del {at(c.synced_at)}</>}
               </p>
 
               {c.status === "publishing" && (
@@ -241,8 +325,11 @@ export default function PromoPage() {
                   actualiza sola cuando confirme.
                 </p>
               )}
-              {c.status === "failed" && c.last_error && (
-                <p className="text-xs mb-2" style={{ color: "var(--red)" }} role="alert">
+              {/* Not only on failure: a pause the platform refused leaves the
+                  campaign as it was, and the reason belongs right here. */}
+              {c.last_error && (
+                <p className="text-xs mb-2" role="alert"
+                   style={{ color: c.status === "failed" ? "var(--red)" : "var(--ember)" }}>
                   {c.last_error}
                 </p>
               )}
@@ -290,11 +377,18 @@ export default function PromoPage() {
                     </button>
                   )}
                   {c.external_id && (
-                    <button onClick={() => setStatus(c, c.status)} disabled={busy}
+                    <button onClick={() => requestSync(c)} disabled={busy}
                             className="px-3 py-1.5 rounded-full text-xs font-bold disabled:opacity-50"
                             style={{ background: "var(--surface-3)", color: "var(--muted)" }}>
                       Actualizar cifras
                     </button>
+                  )}
+                  {c.external_id && (
+                    <a href={platformLink(c)} target="_blank" rel="noreferrer"
+                       className="px-3 py-1.5 rounded-full text-xs font-bold"
+                       style={{ background: "var(--surface-3)", color: "var(--muted)" }}>
+                      Abrir en {m?.name}
+                    </a>
                   )}
                   {c.status !== "ended" && c.status !== "publishing" && (
                     <button onClick={() => setStatus(c, "ended")} disabled={busy}

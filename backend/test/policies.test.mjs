@@ -101,9 +101,11 @@ await db.exec(sql("first_login.sql"));
 await db.exec(sql("stripe_payments.sql"));
 await db.exec(sql("ads_oauth.sql"));
 await db.exec(sql("security_hardening.sql"));
-// Both are documented as safe to run more than once.
+await db.exec(sql("ads_sync.sql"));
+// All three are documented as safe to run more than once.
 await db.exec(sql("ads_oauth.sql"));
 await db.exec(sql("security_hardening.sql"));
+await db.exec(sql("ads_sync.sql"));
 
 await db.exec(`
   insert into auth.users values ('${OWNER}', 'o@x'), ('${STAFF}', 's@x'), ('${STRANGER}', 'x@x'), ('${DEACT}', 'd@x');
@@ -264,15 +266,102 @@ await expectOk("owner disconnects Meta", "authenticated", OWNER,
 check("  ...its Page/expiry details are cleared",
   JSON.stringify((await row(`select details from integrations where provider = 'meta_ads'`)).details) === "{}");
 
-// ---- 5. the readiness query Fellito pastes in the SQL editor -----------------------------------------
+// ---- 5. campaigns and the ads worker's queue (ads_sync.sql) ------------------------------------------
+console.log("\nads worker queue");
+const jobsFor = async (id) => (await db.query(`select action::text, done_at, claimed_at, attempts, last_error from campaign_jobs where campaign_id = $1 order by created_at`, [id])).rows;
+await db.exec(`
+  insert into campaigns (id, provider, name, status, external_id, platform_ids, account_id)
+    values ('dddddddd-0000-0000-0000-000000000001', 'meta_ads', 'Mofongo', 'active', 'c1', '{"campaign":"c1"}', '111');
+  insert into campaigns (id, provider, name, status)
+    values ('dddddddd-0000-0000-0000-000000000002', 'meta_ads', 'Borrador', 'draft');`);
+const LIVE = "dddddddd-0000-0000-0000-000000000001";
+const DRAFT = "dddddddd-0000-0000-0000-000000000002";
+await expectOk("owner pauses a live campaign", "authenticated", OWNER, `update campaigns set status = 'paused' where id = '${LIVE}'`);
+check("  ...a pause job is queued", (await jobsFor(LIVE)).map((j) => j.action).join() === "pause");
+// RLS does not raise for a row the caller may not update; the update simply matches nothing.
+const staffTry = await expectOk("staff tries to turn it back on", "authenticated", STAFF,
+  `update campaigns set status = 'active' where id = '${LIVE}' returning id`);
+check("  ...nothing changes and nothing is queued",
+  staffTry?.rows.length === 0 && (await row(`select status::text s from campaigns where id = '${LIVE}'`)).s === "paused" && (await jobsFor(LIVE)).length === 1);
+await expectErr("the browser cannot claim jobs", "authenticated", OWNER, `select claim_campaign_jobs(10)`);
+await expectErr("the browser cannot finish jobs", "authenticated", OWNER, `select finish_campaign_job(gen_random_uuid(), true)`);
+await expectErr("the browser cannot write platform campaigns", "authenticated", OWNER, `select upsert_platform_campaigns('meta_ads', '[]')`);
+await expectErr("the browser cannot set connection health", "authenticated", OWNER, `select set_integration_health('meta_ads')`);
+const claim1 = await expectOk("service_role claims the job", "service_role", null, `select claim_campaign_jobs(10) as j`);
+const job1 = claim1?.rows[0].j?.[0];
+check("  ...with its campaign attached", job1?.action === "pause" && job1?.campaign?.platform_ids?.campaign === "c1" && job1?.attempts === 1, JSON.stringify(job1));
+const claim2 = await as("service_role", null, `select claim_campaign_jobs(10) as j`);
+check("  ...and a second run does not take it again", claim2.rows[0].j.length === 0, JSON.stringify(claim2.rows[0].j));
+await expectOk("worker finishes it, writing the platform's status back", "service_role", null,
+  `select finish_campaign_job($1::uuid, true, null, '{"status":"paused","platform_status":"PAUSED"}'::jsonb)`, [job1?.job_id]);
+check("  ...the job is done and no new job was queued by the worker's own write",
+  (await jobsFor(LIVE)).length === 1 && (await jobsFor(LIVE))[0].done_at !== null);
+await expectOk("owner turns it back on", "authenticated", OWNER, `update campaigns set status = 'active' where id = '${LIVE}'`);
+check("  ...queues a resume, not a second launch", (await jobsFor(LIVE)).map((j) => j.action).join() === "pause,resume");
+const resumeJob = (await as("service_role", null, `select claim_campaign_jobs(10) as j`)).rows[0].j[0];
+await expectOk("a rate-limited attempt is left open for the next run", "service_role", null,
+  `select finish_campaign_job($1::uuid, false, 'Too many requests', null, true)`, [resumeJob.job_id]);
+let rj = (await jobsFor(LIVE))[1];
+check("  ...not done, not claimed, error kept", rj.done_at === null && rj.claimed_at === null && rj.last_error === "Too many requests", JSON.stringify(rj));
+await db.exec(`update campaign_jobs set attempts = 5 where campaign_id = '${LIVE}' and action = 'resume'`);
+await expectOk("after five attempts it gives up", "service_role", null,
+  `select finish_campaign_job($1::uuid, false, 'Still limited', null, true)`, [resumeJob.job_id]);
+rj = (await jobsFor(LIVE))[1];
+check("  ...done, with the reason on the campaign",
+  rj.done_at !== null && (await row(`select last_error from campaigns where id = '${LIVE}'`)).last_error === "Still limited");
+await expectOk("owner publishes a draft", "authenticated", OWNER, `update campaigns set status = 'publishing' where id = '${DRAFT}'`);
+check("  ...queues a launch", (await jobsFor(DRAFT)).map((j) => j.action).join() === "launch");
+const launchJob = (await as("service_role", null, `select claim_campaign_jobs(10) as j`)).rows[0].j[0];
+await expectOk("a refused launch", "service_role", null,
+  `select finish_campaign_job($1::uuid, false, 'No disponible', null, false)`, [launchJob.job_id]);
+check("  ...marks the campaign failed with the reason",
+  JSON.stringify(await row(`select status::text, last_error from campaigns where id = '${DRAFT}'`)) === JSON.stringify({ status: "failed", last_error: "No disponible" }));
+check("  ...without queueing anything new", (await jobsFor(DRAFT)).length === 1);
+
+console.log("\nplatform sync");
+const metaRows = [
+  { campaign_id: "c1", account_id: "111", name: "Renamed on Meta", status: "paused", platform_status: "PAUSED", daily_budget: 15, spend: 42.17, impressions: 9000, clicks: 250, orders: 7, starts_at: null, ends_at: null },
+  { campaign_id: "c9", account_id: "111", name: "Made in Ads Manager", status: "active", platform_status: "ACTIVE", daily_budget: 10, spend: 5, impressions: 100, clicks: 3, orders: 0, starts_at: "2026-10-01T04:00:00Z", ends_at: null },
+];
+const up1 = await expectOk("worker records what Meta reports", "service_role", null,
+  `select upsert_platform_campaigns('meta_ads', $1::jsonb) as n`, [JSON.stringify(metaRows)]);
+check("  ...two rows handled", up1?.rows[0].n === 2);
+const live = await row(`select name, status::text, spend, impressions, orders, platform_status, synced_at from campaigns where id = '${LIVE}'`);
+check("  ...a campaign made here keeps its own name but takes Meta's numbers and state",
+  live.name === "Mofongo" && live.status === "paused" && Number(live.spend) === 42.17 && live.impressions === 9000 && live.orders === 7 && live.synced_at !== null, JSON.stringify(live));
+const imported = await row(`select name, status::text, origin, external_id, platform_ids, account_id from campaigns where platform_ids->>'campaign' = 'c9'`);
+check("  ...one made in Ads Manager is added, marked as coming from the platform",
+  imported?.origin === "platform" && imported.name === "Made in Ads Manager" && imported.external_id === "c9" && imported.account_id === "111", JSON.stringify(imported));
+await expectOk("the same report again", "service_role", null, `select upsert_platform_campaigns('meta_ads', $1::jsonb)`, [JSON.stringify(metaRows)]);
+check("  ...updates instead of duplicating", Number((await row(`select count(*) n from campaigns where platform_ids ? 'campaign'`)).n) === 2);
+await db.exec(`update campaigns set status = 'publishing' where platform_ids->>'campaign' = 'c9'`);
+await expectOk("a sync during a launch", "service_role", null, `select upsert_platform_campaigns('meta_ads', $1::jsonb)`, [JSON.stringify(metaRows)]);
+check("  ...does not paper over 'publishing'", (await row(`select status::text s from campaigns where platform_ids->>'campaign' = 'c9'`)).s === "publishing");
+const staffView = await expectOk("staff can still see campaigns and their numbers", "authenticated", STAFF, `select name, spend from campaigns`);
+check("  ...all of them", staffView?.rows.length === 3);
+
+console.log("\nconnection health");
+await db.exec(`update integrations set status = 'connected', details = '{"pages":[{"id":"p1"}]}' where provider = 'meta_ads'`);
+await expectOk("worker warns that the Meta token is close to expiry", "service_role", null,
+  `select set_integration_health('meta_ads', null, 'Reconecta Meta antes del 02/11', '{"checked_at":"2026-10-28"}')`);
+let mh = await row(`select status::text, last_error, details from integrations where provider = 'meta_ads'`);
+check("  ...status kept, warning set, details merged not replaced",
+  mh.status === "connected" && mh.last_error.startsWith("Reconecta") && mh.details.pages?.[0]?.id === "p1" && mh.details.checked_at === "2026-10-28", JSON.stringify(mh));
+await expectOk("a later good sync clears the warning", "service_role", null, `select set_integration_health('meta_ads', 'connected', null)`);
+mh = await row(`select status::text, last_error from integrations where provider = 'meta_ads'`);
+check("  ...cleared", mh.status === "connected" && mh.last_error === null);
+await expectOk("health never resurrects a disconnected platform", "service_role", null, `select set_integration_health('tiktok_ads', 'error', 'x')`);
+check("  ...TikTok stays disconnected", (await row(`select status::text s from integrations where provider = 'tiktok_ads'`)).s === "disconnected");
+
+// ---- 6. the readiness query Fellito pastes in the SQL editor -----------------------------------------
 console.log("\nreadiness query");
 const [readiness, status] = await db.exec(sql("check_readiness.sql"));
 const missing = readiness.rows.filter((r) => r.result !== "ok").map((r) => r.item);
-check(`check_readiness.sql: all ${readiness.rows.length} items ok`, readiness.rows.length >= 13 && missing.length === 0, JSON.stringify(missing));
+check(`check_readiness.sql: all ${readiness.rows.length} items ok`, readiness.rows.length >= 17 && missing.length === 0, JSON.stringify(missing));
 check("  ...and its status listing shows the three ad rows without any token",
   status.rows.length === 3 && !JSON.stringify(status.rows).includes("meta-tok") && !JSON.stringify(status.rows).includes("acc-1"));
 
-// ---- 6. self-check -----------------------------------------------------------------------------------
+// ---- 7. self-check -----------------------------------------------------------------------------------
 console.log("\nself-check");
 await db.exec(`create function noop() returns trigger language plpgsql as $$ begin return new; end $$;
                create trigger aa_early before update on orders for each row execute function noop();`);

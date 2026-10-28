@@ -125,7 +125,7 @@ should be able to do something here, the answer is still no.
 | `product_ingredients` | what a dish consumes when sold |
 | `profiles` | staff and owners, with `role` and `active` |
 | `settings` | hours, WhatsApp number |
-| `campaigns` / `campaign_jobs` | ads, and the queue the bot works through |
+| `campaigns` / `campaign_jobs` | ads, and their queue. A Supabase function (the ads worker) works through it and syncs the numbers every 15 minutes; you never write to either |
 | `whatsapp_outbox` | messages waiting to be sent to customers |
 | `ai_usage` | what this bot costs to run, against the owner's monthly ceiling |
 | `loyalty_cards` / `loyalty_codes` | stamps, and one-time reward codes |
