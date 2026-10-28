@@ -18,6 +18,12 @@ can not drift between the website and what the bot quotes on WhatsApp.
 does, the owner/staff split, and the rules that are enforced by Row Level
 Security rather than by the screen. Hand-written.
 
+**`skills/gopicadera-anuncios`** — walks the owner over WhatsApp through creating
+the restaurant's Meta, Google and TikTok apps and connecting them in Canales,
+one step at a time. It sends `admin.gopicadera.com/guia-anuncios.pdf`, printed
+from the console's `/guia-anuncios` page by `scripts/build-guide-pdf.mjs`.
+Hand-written; keep its step ids in step with that page.
+
 ## Regenerating the menu skill
 
 After any menu or price change on the storefront:

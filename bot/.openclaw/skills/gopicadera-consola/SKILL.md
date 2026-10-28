@@ -160,15 +160,15 @@ them — the sign-in happens on their own account, on the platform's screen.
 
 - **Owners only.** Staff can't even open Conexiones. If a non-owner asks, don't
   walk them through it.
-- **Meta, Google Ads and TikTok connect with one button, no keys.** Tell them:
-  open the console → **Conexiones** → the **Publicidad** section → the
-  platform's card → **"Conectar con …"**. That sends them to the platform's own
-  login; they sign in with the business account and press Allow, then land back
-  on the console and the card turns to **"Conectado"**.
-- If they instead see **"falta un paso del lado técnico, avísale a Fellito"**,
-  the back end for that platform isn't set up yet. That is Eclat's job, not
-  something the owner can fix from the screen — tell them to let Fellito know,
-  and don't send them in circles retrying the button.
+- **Meta, Google Ads and TikTok need the restaurant's own app first.** The owner
+  creates one app per platform with her own accounts, saves its id and secret on
+  that platform's card in **Canales** ("App de Meta", "App de Google", "App de
+  TikTok" → Guardar), then taps **"Conectar con …"**, and finally chooses the ad
+  account (and, for Meta, the Page). Walk her through it with the
+  `gopicadera-anuncios` skill: it has the PDF guide, every step by id, and the
+  troubleshooting. Secrets go only into the console, never into WhatsApp.
+- If **"Conectar con …"** is greyed out, that platform's app isn't saved yet. If the
+  card says **"Elige la cuenta publicitaria…"**, she still has to pick the account.
 - **Delivery apps (DoorDash, Uber Eats, Grubhub) and the POS (Square, Clover,
   Toast, Lightspeed) do NOT connect with a button.** The restaurant first has
   to be approved as a partner on that platform's merchant portal; only then
