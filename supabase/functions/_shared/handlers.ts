@@ -3,7 +3,7 @@
 import { buildCheckoutParams, corsHeaders, json, toFormBody, verifyStripeSignature } from "./stripe-lib.ts";
 import type { CheckoutOrder, Env } from "./stripe-lib.ts";
 import {
-  metaAdAccountsUrl, metaAuthorizationUrl, metaCodeExchangeUrl, metaLongLivedExchangeUrl,
+  metaAdAccountsUrl, metaAuthorizationUrl, metaCodeExchangeUrl, metaDebugTokenUrl, metaLongLivedExchangeUrl, metaPagesUrl,
   signState, verifyState,
   tiktokAuthorizationUrl, tiktokTokenExchangeBody, TIKTOK_TOKEN_URL,
   googleAuthorizationUrl, googleTokenExchangeBody, GOOGLE_TOKEN_URL, GOOGLE_ACCESSIBLE_CUSTOMERS_URL,
@@ -46,6 +46,8 @@ function config(env: Env) {
     oauthStateSecret: env.OAUTH_STATE_SECRET || "",
     metaAppId: env.META_APP_ID || "",
     metaAppSecret: env.META_APP_SECRET || "",
+    // Optional. Only for apps whose permissions live in a "Facebook Login for Business" configuration.
+    metaLoginConfigId: env.META_LOGIN_CONFIG_ID || "",
     tiktokAppId: env.TIKTOK_APP_ID || "",
     tiktokAppSecret: env.TIKTOK_APP_SECRET || "",
     googleClientId: env.GOOGLE_ADS_CLIENT_ID || "",
@@ -242,6 +244,46 @@ export async function handleStripeStatus(req: Request, deps: Deps): Promise<Resp
   }
 }
 
+// The non-secret facts about a Meta connection that the ads work needs later: which Page an ad speaks as,
+// the Instagram account linked to it, and when the token stops working. Best-effort, like the ad-account
+// lookup -- each part that fails is left out rather than undoing a good connection.
+type MetaDetails = {
+  pages?: { id: string; name: string | null; instagram: { id: string; username: string | null } | null }[];
+  token_expires_at?: string | null;
+  scopes?: string[];
+};
+
+async function metaConnectionDetails(c: ReturnType<typeof config>, fetchFn: typeof fetch, accessToken: string): Promise<MetaDetails> {
+  const details: MetaDetails = {};
+  try {
+    const r = await fetchFn(metaPagesUrl(accessToken));
+    const body: { data?: { id?: string; name?: string; instagram_business_account?: { id?: string; username?: string } }[] } =
+      await r.json().catch(() => ({}));
+    if (r.ok) {
+      details.pages = (body.data || []).filter((p) => p.id).map((p) => ({
+        id: String(p.id),
+        name: p.name ?? null,
+        instagram: p.instagram_business_account?.id
+          ? { id: String(p.instagram_business_account.id), username: p.instagram_business_account.username ?? null }
+          : null,
+      }));
+    }
+  } catch (e) { console.error("could not list Pages (connection still saved):", e instanceof Error ? e.message : e); }
+
+  try {
+    const r = await fetchFn(metaDebugTokenUrl(c.metaAppId, c.metaAppSecret, accessToken));
+    const body: { data?: { expires_at?: number; scopes?: string[] } } = await r.json().catch(() => ({}));
+    if (r.ok && body.data) {
+      // 0 means the token does not expire.
+      const exp = Number(body.data.expires_at || 0);
+      details.token_expires_at = exp > 0 ? new Date(exp * 1000).toISOString() : null;
+      if (Array.isArray(body.data.scopes)) details.scopes = body.data.scopes.map(String);
+    }
+  } catch (e) { console.error("could not read the token's expiry (connection still saved):", e instanceof Error ? e.message : e); }
+
+  return details;
+}
+
 // ------------------------------------------------------------------------ Meta ads OAuth -----
 // Start: owner-only (same callerIsOwner check as stripe-status). Returns {url} for the BROWSER to
 // navigate to itself -- a redirect issued from here would need to carry the owner's auth header,
@@ -266,7 +308,7 @@ export async function handleMetaOAuthStart(req: Request, deps: Deps): Promise<Re
     const nowSec = Math.floor((deps.now ? deps.now() : Date.now()) / 1000);
     const state = await signState(c.oauthStateSecret, "meta_ads", nowSec);
     const redirectUri = `${c.supabaseUrl}/functions/v1/meta-oauth-callback`;
-    return json({ url: metaAuthorizationUrl(c.metaAppId, redirectUri, state) }, 200, cors);
+    return json({ url: metaAuthorizationUrl(c.metaAppId, redirectUri, state, c.metaLoginConfigId) }, 200, cors);
   } catch (e) {
     console.error("meta-oauth-start failed:", e instanceof Error ? e.message : e);
     return json({ error: "server_error" }, 500, cors);
@@ -328,7 +370,11 @@ export async function handleMetaOAuthCallback(req: Request, deps: Deps): Promise
       accountId = (acctBody.data || []).map((a) => a.account_id).filter((x): x is string => !!x).join(",");
     } catch (e) { console.error("could not list ad accounts (connection still saved):", e instanceof Error ? e.message : e); }
 
-    await rpc(c, deps.fetch, "apply_oauth_connection", { p_provider: "meta_ads", p_access_token: accessToken, p_account_id: accountId });
+    const details = await metaConnectionDetails(c, deps.fetch, accessToken);
+
+    await rpc(c, deps.fetch, "apply_oauth_connection", {
+      p_provider: "meta_ads", p_access_token: accessToken, p_account_id: accountId, p_details: details,
+    });
     return backToConsole({ oauth: "meta", status: "connected" });
   } catch (e) {
     return fail(e instanceof Error ? e.message : String(e));
@@ -406,11 +452,10 @@ export async function handleTiktokOAuthCallback(req: Request, deps: Deps): Promi
       return fail(tokenBody.message || "token exchange failed");
     }
 
-    // Unlike Meta's long-lived token, TikTok's access_token expires every 24h and can only be
-    // renewed with this refresh_token -- without it the connection would go stale in a day with no
-    // way back, so that counts as a failed connection rather than a degraded-but-saved one.
-    const refreshToken = tokenBody.data.refresh_token;
-    if (!refreshToken) return fail("no refresh token in response");
+    // TikTok documents this as a long-term advertiser token: it does not expire unless revoked, and the
+    // response carries no refresh_token. (The 24-hour token plus refresh_token belongs to TikTok's creator
+    // and Login Kit tokens, a different product.) Keep a refresh_token only if one is ever sent.
+    const refreshToken = tokenBody.data.refresh_token || null;
 
     const accountId = (tokenBody.data.advertiser_ids || []).map((a) => String(a)).filter(Boolean).join(",");
 

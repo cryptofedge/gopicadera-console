@@ -1,8 +1,7 @@
 # Connecting Meta (Facebook/Instagram) Ads
 
-Status (2026-10-01): code written and tested (`node ops/stripe-functions.test.mjs` — 133 checks), built clean
-from `origin/master`, and sitting in [PR #2](https://github.com/cryptofedge/gopicadera-console/pull/2). Not merged,
-not deployed, no app credentials exist yet. Until all three of those happen, there is nothing for anyone to click.
+Status (2026-10-28): merged and deployed; no app credentials exist yet, so the button answers `not_configured`.
+Tests: `npm run test:functions` (fake Meta/Supabase) and `npm run test:sql`. Live check: `npm run check:connect`.
 
 ## How it works
 
@@ -18,13 +17,26 @@ not deployed, no app credentials exist yet. Until all three of those happen, the
    ad account(s), and save all of it via `apply_oauth_connection`.
 5. The owner lands back on the Integrations page with a banner saying it worked (or why it didn't).
 
-The token lives in the `integrations.client_secret` column, same as every other provider — write-only from the
-console, never shown again once saved. The restaurant's own ad account id(s) (comma-joined if there is more than
-one) land in `store_id`.
+The token lives in the `integrations.client_secret` column, same as every other provider. No browser can read
+it, the owner's included; `security_hardening.sql` grants the browser only the non-secret columns. The restaurant's
+own ad account id(s) (comma-joined if there is more than one) land in `store_id`.
 
-This uses Meta's **standard access** tier: good enough for a business to manage its own ad account, approved
-automatically, no Business Verification or App Review needed. It does not cover managing *other* businesses' ad
-accounts — not something this restaurant needs.
+The callback also records, in `integrations.details`, what the ads work needs later and the console may show:
+the Pages this login can advertise as, the Instagram professional account linked to each (an ad needs both to run
+on Facebook and Instagram), and when the token expires (`debug_token`). A long-lived user token lasts about 60 days
+and cannot be renewed server-side, so the owner has to reconnect before then.
+
+**Permissions asked for, once:** `ads_management`, `ads_read`, `pages_show_list`, `pages_read_engagement`,
+`pages_manage_ads`, `business_management`, `instagram_basic`. All are asked for up front, so the create-ads work
+never forces a reconnect. If the app uses a *Facebook Login for Business* configuration instead of a scope list,
+put its id in the `META_LOGIN_CONFIG_ID` secret and the start function sends `config_id` instead.
+
+**Who connects:** Meta's default **Limited access** tier (formerly "standard") only works for people with a role on
+the app. So the app sits in Go Picadera's business portfolio, Fellito is an app admin, and Fellito taps Conectar.
+Llulisa only invites him as an admin of her business portfolio, and his login reaches her Page, ad account and
+Instagram through that. Anyone else connecting would need App Review.
+
+Graph API version: `v26.0` (`META_GRAPH_VERSION` in `oauth-lib.ts`). v21.0's Marketing API sunset was 2025-09-09.
 
 ## Files
 

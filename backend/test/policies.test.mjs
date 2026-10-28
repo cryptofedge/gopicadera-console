@@ -1,0 +1,284 @@
+// Runs the repo's SQL in PGlite (Postgres compiled to WebAssembly) with a small stand-in for
+// Supabase's roles and auth.uid(), then plays anon, staff, owner and service_role requests against
+// the Row Level Security policies and guards. `npm run test:sql`.
+//
+// This is the only place the policies are executed before they reach the live project, so a check
+// here is the cheapest proof that a staff session really cannot do what the UI merely hides.
+import { PGlite } from "@electric-sql/pglite";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const dir = fileURLToPath(new URL("..", import.meta.url));
+// Windows checkouts may have CRLF line endings; the splits below look for "\n".
+const sql = (f) => readFileSync(join(dir, f), "utf8").replace(/\r\n/g, "\n");
+const db = new PGlite();
+
+const OWNER = "11111111-1111-1111-1111-111111111111";
+const STAFF = "22222222-2222-2222-2222-222222222222";
+const STRANGER = "33333333-3333-3333-3333-333333333333";
+const DEACT = "44444444-4444-4444-4444-444444444444";
+
+process.on("unhandledRejection", (e) => { console.log("LOAD ERROR:", e.message, e.where ?? ""); process.exit(2); });
+
+// ---- Supabase stand-in ------------------------------------------------------------------------
+await db.exec(`
+  create role anon nologin;
+  create role authenticated nologin;
+  create role service_role nologin bypassrls;
+  create schema auth;
+  create table auth.users (id uuid primary key, email text);
+  create function auth.uid() returns uuid language sql stable as $$
+    select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
+  create schema storage;
+  create table storage.buckets (id text primary key, name text, public boolean);
+  create table storage.objects (id uuid primary key default gen_random_uuid(), bucket_id text, name text);
+  alter table storage.objects enable row level security;
+  grant usage on schema public, auth, storage to anon, authenticated, service_role;
+  alter default privileges in schema public grant all on tables    to anon, authenticated, service_role;
+  alter default privileges in schema public grant all on sequences to anon, authenticated, service_role;
+  alter default privileges in schema public grant all on functions to anon, authenticated, service_role;
+`);
+// PGlite has no uuid-ossp; the built-in generator is equivalent here.
+await db.exec(`create function uuid_generate_v4() returns uuid language sql as $$ select gen_random_uuid() $$;`);
+
+// Stand-in for whatsapp_orders.sql + place_order.sql while they live only on the
+// add-order-flow-and-elmini-media branch. Same shape: a GP-#### code trigger and two
+// SECURITY DEFINER doors. Once those files are on this branch, they are loaded instead.
+const ORDER_FLOW_STANDIN = `
+  create sequence if not exists order_code_seq start 1000;
+  create or replace function assign_order_code() returns trigger language plpgsql as $$
+  begin
+    if new.code is null or new.code = '' then new.code := 'GP-' || nextval('order_code_seq')::text; end if;
+    return new;
+  end $$;
+  create trigger trg_assign_order_code before insert on orders for each row execute function assign_order_code();
+  create or replace function get_order_by_code(p_code text, p_phone text) returns jsonb
+    language plpgsql security definer set search_path = public as $$
+  declare result jsonb;
+  begin
+    select jsonb_build_object('code', o.code, 'payment', o.payment,
+             'items', coalesce((select jsonb_agg(jsonb_build_object('name', oi.name, 'qty', oi.qty)) from order_items oi where oi.order_id = o.id), '[]'::jsonb))
+      into result from orders o where o.code = p_code and o.phone = p_phone;
+    return result;
+  end $$;
+  create or replace function place_order(p_source order_source, p_customer_name text, p_phone text, p_mode order_mode,
+      p_subtotal numeric, p_tax numeric, p_total numeric, p_loyalty_code text, p_note text, p_items jsonb)
+    returns text language plpgsql security definer set search_path = public as $$
+  declare v_id uuid; v_code text; v_item jsonb;
+  begin
+    insert into orders (source, customer_name, phone, mode, subtotal, tax, total, loyalty_code, note)
+    values (p_source, p_customer_name, p_phone, p_mode, p_subtotal, p_tax, p_total, p_loyalty_code, p_note)
+    returning id, code into v_id, v_code;
+    for v_item in select * from jsonb_array_elements(p_items) loop
+      insert into order_items (order_id, name, qty, unit_price, options)
+      values (v_id, v_item->>'name', coalesce((v_item->>'qty')::int, 1), (v_item->>'unit_price')::numeric, coalesce(v_item->'options', '[]'::jsonb));
+    end loop;
+    return v_code;
+  end $$;
+`;
+
+// ---- repo SQL, in apply order (backend/SETUP.md) ------------------------------------------------
+await db.exec(sql("schema.sql").replace(`create extension if not exists "uuid-ossp";`, ""));
+{
+  // integrations.sql adds enum values and uses them in the same file; Postgres refuses that inside
+  // one transaction, so the enum additions run on their own.
+  const src = sql("integrations.sql");
+  const cut = src.indexOf("alter type integration_kind add value 'ads';");
+  const after = src.indexOf("insert into integrations (provider, kind) values\n  ('google_ads'");
+  await db.exec(src.slice(0, cut));
+  for (const stmt of src.slice(cut, after).split(";").map((s) => s.trim()).filter(Boolean)) await db.exec(stmt);
+  await db.exec(src.slice(after));
+}
+if (existsSync(join(dir, "whatsapp_orders.sql")) && existsSync(join(dir, "place_order.sql"))) {
+  await db.exec(sql("whatsapp_orders.sql"));
+  await db.exec(sql("place_order.sql"));
+} else {
+  await db.exec(ORDER_FLOW_STANDIN);
+}
+await db.exec(sql("seed_menu.sql"));
+await db.exec(sql("first_login.sql"));
+await db.exec(sql("stripe_payments.sql"));
+await db.exec(sql("ads_oauth.sql"));
+await db.exec(sql("security_hardening.sql"));
+// Both are documented as safe to run more than once.
+await db.exec(sql("ads_oauth.sql"));
+await db.exec(sql("security_hardening.sql"));
+
+await db.exec(`
+  insert into auth.users values ('${OWNER}', 'o@x'), ('${STAFF}', 's@x'), ('${STRANGER}', 'x@x'), ('${DEACT}', 'd@x');
+  insert into profiles (id, full_name, role, active) values
+    ('${OWNER}', 'Dueno', 'owner', true), ('${STAFF}', 'Yudelka', 'staff', true), ('${DEACT}', 'Ex', 'staff', false);
+`);
+
+// ---- harness ------------------------------------------------------------------------------------
+let pass = 0, fail = 0;
+async function as(role, uid, q, params) {
+  await db.exec(`set role ${role}; select set_config('request.jwt.claim.sub', '${uid ?? ""}', false);`);
+  try { return await db.query(q, params); }
+  finally { await db.exec(`reset role; select set_config('request.jwt.claim.sub', '', false);`); }
+}
+async function expectOk(label, role, uid, q, params) {
+  try { const r = await as(role, uid, q, params); pass++; console.log("  ok    ", label); return r; }
+  catch (e) { fail++; console.log("  FAIL  ", label, "->", e.message); }
+}
+async function expectErr(label, role, uid, q, params) {
+  try { await as(role, uid, q, params); fail++; console.log("  FAIL  ", label, "-> succeeded, expected an error"); }
+  catch (e) { pass++; console.log("  ok    ", label, `(${e.message.slice(0, 70)})`); }
+}
+function check(label, cond, detail) {
+  if (cond) { pass++; console.log("  ok    ", label); }
+  else { fail++; console.log("  FAIL  ", label, detail ?? ""); }
+}
+const row = async (q) => (await db.query(q)).rows[0];
+const firstPricedSlug = async () => (await row(`select slug from products where price is not null and available order by sort limit 1`)).slug;
+
+// ---- 1. anonymous order inserts -------------------------------------------------------------------
+console.log("\nanon inserts");
+await expectOk("anon inserts a web order claiming paid/done/verified", "anon", null,
+  `insert into orders (id, code, source, subtotal, total, payment, status, price_verified, external_id, taken_by_name, paid_at)
+   values ('aaaaaaaa-0000-0000-0000-000000000001', 'FAKE-1', 'web', 0.01, 0.01, 'paid', 'done', true, 'dd-123', 'Richard', now())`);
+let o = await row(`select * from orders where code = 'FAKE-1'`);
+check("  ...stored as new / unpaid / unverified", o.status === "new" && o.payment === "unpaid" && o.price_verified === false, JSON.stringify(o));
+check("  ...external_id, paid_at and taken_by_name reset", o.external_id === null && o.paid_at === null && o.taken_by_name === null);
+await expectOk("anon adds a line to its own fresh order", "anon", null,
+  `insert into order_items (order_id, name, qty, unit_price) values ('aaaaaaaa-0000-0000-0000-000000000001', 'Chimi', 1, 0.01)`);
+try { await as("service_role", null, `select begin_card_checkout('FAKE-1')`); check("begin_card_checkout refuses it as unverified", false, "succeeded"); }
+catch (e) { check("begin_card_checkout refuses it as unverified", /not priced by the server/.test(e.message), e.message); }
+await expectErr("signed-in user with no profile cannot insert (stamp_taker FK)", "authenticated", STRANGER,
+  `insert into orders (code, total) values ('FAKE-X', 1)`);
+await expectOk("deactivated staff gets the same reset as anon", "authenticated", DEACT,
+  `insert into orders (code, total, payment) values ('FAKE-2', 1, 'paid')`);
+check("  ...stored unpaid", (await row(`select payment from orders where code = 'FAKE-2'`))?.payment === "unpaid");
+
+console.log("\nstorefront RPCs");
+const card = await expectOk("anon place_card_order", "anon", null,
+  `select place_card_order('Ana', '5551234', 'pickup', null, null, $1::jsonb) as r`,
+  [JSON.stringify([{ slug: await firstPricedSlug(), qty: 2 }])]);
+o = await row(`select * from orders where code = '${card?.rows[0].r.code}'`);
+check("  ...card order keeps price_verified", o?.price_verified === true, JSON.stringify(o));
+check("  ...card order has its lines", Number((await row(`select count(*) n from order_items where order_id = '${o?.id}'`)).n) === 1);
+await expectErr("anon cannot add a line to the card order", "anon", null,
+  `insert into order_items (order_id, name, qty, unit_price) values ('${o?.id}', 'Extra', 9, 0)`);
+const po = await expectOk("storefront place_order still works for anon", "anon", null,
+  `select place_order('web', null, '5550000', 'pickup', 12.5, 0, 12.5, null, null, '[{"name":"Yaroa","qty":1,"unit_price":12.5}]'::jsonb) as code`);
+check("  ...code assigned by trg_assign_order_code", /^GP-\d+$/.test(po?.rows[0].code ?? ""), po?.rows[0].code);
+await expectOk("bot-style direct insert: order with its own id and no code", "anon", null,
+  `insert into orders (id, source, phone, total) values ('bbbbbbbb-0000-0000-0000-000000000001', 'whatsapp', '5551111', 8)`);
+await expectOk("  ...then its lines", "anon", null,
+  `insert into order_items (order_id, name, qty, unit_price) values ('bbbbbbbb-0000-0000-0000-000000000001', 'Empanada', 2, 4)`);
+const botCode = (await row(`select code from orders where id = 'bbbbbbbb-0000-0000-0000-000000000001'`)).code;
+check("  ...got a GP code", /^GP-\d+$/.test(botCode));
+const back = await expectOk("get_order_by_code reads it back with code + phone", "anon", null,
+  `select get_order_by_code('${botCode}', '5551111') as o`);
+check("  ...unpaid, with its 2 empanadas", back?.rows[0].o?.payment === "unpaid" && back?.rows[0].o?.items?.[0]?.qty === 2, JSON.stringify(back?.rows[0].o));
+await db.exec(`update orders set created_at = now() - interval '1 hour' where code = 'FAKE-2'`);
+await expectErr("anon cannot add a line to an hour-old order", "anon", null,
+  `insert into order_items (order_id, name, qty, unit_price) values ('${(await row(`select id from orders where code = 'FAKE-2'`)).id}', 'Late', 1, 0)`);
+await db.exec(`update orders set payment = 'paid' where code = 'FAKE-1'`);
+await expectErr("anon cannot add a line to a paid order", "anon", null,
+  `insert into order_items (order_id, name, qty, unit_price) values ('aaaaaaaa-0000-0000-0000-000000000001', 'Free', 5, 0)`);
+
+// ---- 2. staff updates -------------------------------------------------------------------------------
+console.log("\nstaff updates");
+const B = `'${o?.id}'`;
+await expectOk("staff moves new -> cooking", "authenticated", STAFF, `update orders set status = 'cooking' where id = ${B}`);
+check("  ...handler stamped by the server", (await row(`select handled_by_name from orders where id = ${B}`)).handled_by_name === "Yudelka");
+await expectErr("staff cannot change the total", "authenticated", STAFF, `update orders set total = 0.01 where id = ${B}`);
+await expectErr("staff cannot mark it paid", "authenticated", STAFF, `update orders set payment = 'paid' where id = ${B}`);
+await expectErr("staff cannot sneak a total in with a status change", "authenticated", STAFF, `update orders set status = 'ready', total = 1 where id = ${B}`);
+await expectErr("staff cannot set handled_by_name themselves", "authenticated", STAFF, `update orders set handled_by_name = 'Richard' where id = ${B}`);
+await expectOk("staff moves cooking -> ready", "authenticated", STAFF, `update orders set status = 'ready' where id = ${B}`);
+await expectOk("staff moves ready -> done", "authenticated", STAFF, `update orders set status = 'done' where id = ${B}`);
+check("  ...done_at set by deplete_on_done", (await row(`select done_at from orders where id = ${B}`)).done_at !== null);
+await expectErr("staff cannot reopen a done order", "authenticated", STAFF, `update orders set status = 'cooking' where id = ${B}`);
+await expectOk("owner can change a total", "authenticated", OWNER, `update orders set total = 99 where id = ${B}`);
+await expectOk("owner can reopen", "authenticated", OWNER, `update orders set status = 'ready' where id = ${B}`);
+
+console.log("\nserver paths");
+const fresh = await expectOk("anon places another card order", "anon", null,
+  `select place_card_order(null, null, 'pickup', null, null, $1::jsonb) as r`,
+  [JSON.stringify([{ slug: await firstPricedSlug(), qty: 1 }])]);
+const f = await row(`select * from orders where code = '${fresh?.rows[0].r.code}'`);
+await expectOk("service_role begin_card_checkout", "service_role", null, `select begin_card_checkout('${f.code}')`);
+const ev = await expectOk("service_role apply_stripe_event marks it paid", "service_role", null,
+  `select apply_stripe_event('evt_1', 'checkout.session.completed', $1::jsonb) as r`,
+  [JSON.stringify({ id: "cs_1", client_reference_id: f.code, payment_status: "paid", amount_total: Math.round(Number(f.total) * 100), currency: "usd", payment_intent: "pi_1" })]);
+check("  ...outcome paid", ev?.rows[0].r === "paid", ev?.rows[0].r);
+
+// ---- 3. loyalty codes --------------------------------------------------------------------------------
+console.log("\nloyalty codes");
+await db.exec(`insert into loyalty_cards (id, phone) values ('cccccccc-0000-0000-0000-000000000001', '555');
+               insert into loyalty_codes (code, card_id) values ('GP-A', 'cccccccc-0000-0000-0000-000000000001'), ('GP-B', 'cccccccc-0000-0000-0000-000000000001')`);
+await expectOk("staff spends a code directly", "authenticated", STAFF, `update loyalty_codes set redeemed_at = '2000-01-01' where code = 'GP-A'`);
+const lc = await row(`select * from loyalty_codes where code = 'GP-A'`);
+check("  ...time and person come from the server", new Date(lc.redeemed_at).getFullYear() > 2000 && lc.redeemed_by === STAFF, JSON.stringify(lc));
+await expectErr("staff cannot un-spend it", "authenticated", STAFF, `update loyalty_codes set redeemed_at = null where code = 'GP-A'`);
+await expectErr("staff cannot move a code to another card", "authenticated", STAFF, `update loyalty_codes set card_id = null where code = 'GP-B'`);
+await expectOk("staff redeem_code() still works", "authenticated", STAFF, `select redeem_code('GP-B')`);
+await expectOk("owner can un-spend", "authenticated", OWNER, `update loyalty_codes set redeemed_at = null where code = 'GP-A'`);
+
+// ---- 4. integrations ---------------------------------------------------------------------------------
+console.log("\nintegrations");
+// A token stored by the old ads_oauth.sql (in client_id), then the new file re-run over it.
+await db.exec(`update integrations set client_id = 'old-refresh', refresh_token = null, client_secret = 'old-access', status = 'connected' where provider = 'tiktok_ads'`);
+await db.exec(sql("ads_oauth.sql"));
+let t = await row(`select client_id, refresh_token from integrations where provider = 'tiktok_ads'`);
+check("re-running ads_oauth.sql moves the old token out of client_id", t.client_id === null && t.refresh_token === "old-refresh", JSON.stringify(t));
+check("there is exactly one apply_oauth_connection (no ambiguous overloads)",
+  Number((await row(`select count(*) n from pg_proc where proname = 'apply_oauth_connection'`)).n) === 1);
+await expectErr("the browser cannot call apply_oauth_connection", "authenticated", OWNER,
+  `select apply_oauth_connection('meta_ads', 'x', 'x')`);
+await expectOk("service_role connects TikTok the way the callback does (no refresh token, no details)", "service_role", null,
+  `select apply_oauth_connection(p_provider => 'tiktok_ads', p_access_token => 'acc-1', p_account_id => 'adv-1', p_refresh_token => null)`);
+t = await row(`select client_id, refresh_token, client_secret, has_secret, details from integrations where provider = 'tiktok_ads'`);
+check("  ...token saved, no refresh token, empty details, has_secret true",
+  t.client_id === null && t.refresh_token === null && t.client_secret === "acc-1" && t.has_secret === true && JSON.stringify(t.details) === "{}", JSON.stringify(t));
+const metaDetails = { pages: [{ id: "page-1", name: "Go Picadera", instagram: { id: "ig-1", username: "gopicadera" } }], token_expires_at: "2026-12-27T12:00:00.000Z" };
+await expectOk("service_role connects Meta with its Page, Instagram and expiry", "service_role", null,
+  `select apply_oauth_connection(p_provider => 'meta_ads', p_access_token => 'meta-tok', p_account_id => '111,222', p_details => $1::jsonb)`,
+  [JSON.stringify(metaDetails)]);
+const page = await expectOk("owner runs the Canales page query, details included", "authenticated", OWNER,
+  `select provider, kind, status, store_id, client_id, has_secret, details, last_order_at, last_error, auto_accept from integrations order by provider`);
+check("  ...and sees every row", page?.rows.length === 11, page?.rows.length);
+check("  ...with Meta's Page and Instagram, but no token", (() => {
+  const m = page?.rows.find((r) => r.provider === "meta_ads");
+  return m?.details?.pages?.[0]?.instagram?.username === "gopicadera" && !JSON.stringify(m).includes("meta-tok");
+})());
+await expectErr("owner cannot read client_secret", "authenticated", OWNER, `select client_secret from integrations`);
+await expectErr("owner cannot read refresh_token", "authenticated", OWNER, `select refresh_token from integrations`);
+await expectErr("owner cannot select *", "authenticated", OWNER, `select * from integrations`);
+const staffPage = await expectOk("staff runs the same query without an error", "authenticated", STAFF,
+  `select provider, has_secret, details from integrations`);
+check("  ...and gets no rows", staffPage?.rows.length === 0);
+await expectOk("owner saves a pasted key", "authenticated", OWNER,
+  `update integrations set store_id = 's1', client_id = 'c1', client_secret = 'k1', status = 'pending' where provider = 'ubereats'`);
+check("  ...has_secret true", (await row(`select has_secret from integrations where provider = 'ubereats'`)).has_secret === true);
+await db.exec(`update integrations set refresh_token = 'tt-refresh' where provider = 'tiktok_ads'`);
+await expectOk("owner disconnects TikTok the way the console does", "authenticated", OWNER,
+  `update integrations set status = 'disconnected', client_secret = null where provider = 'tiktok_ads'`);
+t = await row(`select refresh_token, client_secret, has_secret from integrations where provider = 'tiktok_ads'`);
+check("  ...refresh token cleared too", t.refresh_token === null && t.client_secret === null && t.has_secret === false, JSON.stringify(t));
+await expectOk("owner disconnects Meta", "authenticated", OWNER,
+  `update integrations set status = 'disconnected', client_secret = null where provider = 'meta_ads'`);
+check("  ...its Page/expiry details are cleared",
+  JSON.stringify((await row(`select details from integrations where provider = 'meta_ads'`)).details) === "{}");
+
+// ---- 5. the readiness query Fellito pastes in the SQL editor -----------------------------------------
+console.log("\nreadiness query");
+const [readiness, status] = await db.exec(sql("check_readiness.sql"));
+const missing = readiness.rows.filter((r) => r.result !== "ok").map((r) => r.item);
+check(`check_readiness.sql: all ${readiness.rows.length} items ok`, readiness.rows.length >= 13 && missing.length === 0, JSON.stringify(missing));
+check("  ...and its status listing shows the three ad rows without any token",
+  status.rows.length === 3 && !JSON.stringify(status.rows).includes("meta-tok") && !JSON.stringify(status.rows).includes("acc-1"));
+
+// ---- 6. self-check -----------------------------------------------------------------------------------
+console.log("\nself-check");
+await db.exec(`create function noop() returns trigger language plpgsql as $$ begin return new; end $$;
+               create trigger aa_early before update on orders for each row execute function noop();`);
+const warnings = [];
+await db.exec(sql("security_hardening.sql"), { onNotice: (n) => warnings.push(n.message) });
+check("warns about a BEFORE trigger that sorts ahead of the guard", warnings.some((w) => w.includes("aa_early")), JSON.stringify(warnings));
+
+console.log(`\n${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);

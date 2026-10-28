@@ -90,3 +90,19 @@ Each file assumes the ones above it. `APPLY_ALL.sql` is exactly the first two.
 8. `ai_usage_writer.sql`
 9. `security_hardening.sql` — what a browser may write to orders, loyalty codes and integrations.
    Run it last; it is safe to run again.
+
+The whole sequence is executed by `npm run test:sql` (Postgres in WebAssembly, no account needed).
+
+## 5. Before telling the owner the ad connections work
+
+Nobody asks Llulisa to do anything until all of these pass:
+
+1. `npm test`: the connect-flow and database tests are green.
+2. `backend/check_readiness.sql`, pasted in the SQL editor: every row says `ok`. It is read-only.
+3. `npm run check:connect`: each platform answers `302`, meaning deployed with secrets set. TikTok can stay at
+   `503` until its app review clears.
+4. Fellito connects Meta and Google once from **Canales** (he is an app admin, and Llulisa has invited him into her
+   business accounts; see META_ADS.md and GOOGLE_ADS.md). Both cards say **Conectado**, and the second result of
+   `check_readiness.sql` shows a Page for Meta.
+
+Only then does she get the short message asking her to accept the invitations, if she has not already.

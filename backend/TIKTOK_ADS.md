@@ -1,9 +1,7 @@
 # Connecting TikTok Ads
 
-Status (2026-10-02): code written and tested (`node ops/stripe-functions.test.mjs` — 165 checks), built clean
-from `origin/master`, and sitting in [PR #3](https://github.com/cryptofedge/gopicadera-console/pull/3). Not
-merged, not deployed, no app credentials exist yet. Same shape as [META_ADS.md](META_ADS.md) — read that first
-if this is the first of the two you're looking at.
+Status (2026-10-28): merged and deployed; no app credentials exist yet. Same shape as [META_ADS.md](META_ADS.md)
+— read that first. Tests: `npm run test:functions`. Live check: `npm run check:connect`.
 
 ## How it works
 
@@ -15,27 +13,24 @@ if this is the first of the two you're looking at.
    `tiktok-oauth-callback` carrying `auth_code` (and, redundantly, `code` — either is accepted).
 4. `tiktok-oauth-callback` verifies the `state` signature and expiry **before anything else** — same guarantee
    as Meta: a forged or stale `state` gets bounced with no database write at all. Only then does it exchange
-   the code for an access token and a **refresh token** in one call, and save both via `apply_oauth_connection`.
+   the code for an access token, and save it via `apply_oauth_connection`.
 5. The owner lands back on the Integrations page with a banner saying it worked (or why it didn't).
 
-## The one thing that's genuinely different from Meta: token lifetime
+## Token lifetime
 
-TikTok's access token expires **every 24 hours**. The only way to get a new one without the owner
-re-approving is the `refresh_token` the exchange also returns — so if TikTok's response is ever missing it,
-this console treats the whole connection as **failed**, not "connected but degraded," because a connection
-with no refresh token would quietly stop working the next day with no way to notice or recover.
+TikTok documents the Marketing API's advertiser token (`/oauth2/access_token/`) as **long-term**: it does not
+expire unless the authorization is revoked, and the response carries **no refresh token**. An earlier version of
+this flow assumed a 24-hour token plus a refresh token, which belongs to TikTok's creator / Login Kit tokens, a
+different product. That version refused every real connection for lacking a refresh token. The callback now
+saves the access token and keeps a refresh token only if one is ever sent (in `integrations.refresh_token`, which
+no browser can read and Desconectar clears).
 
-**This console does not yet refresh that token automatically.** There is no background job that calls TikTok
-again before the 24 hours are up. That is fine for what exists today — connecting and storing credentials,
-nothing reads them yet — but it means "Conectado" on the card reflects "the last connection attempt
-succeeded," not "the access token is valid right now." Before any feature is built that actually calls the
-TikTok Ads API with this token (posting ads, reading spend, etc.), a refresh job needs to exist first, or
-every call will start failing with an expired token within a day of connecting.
+If TikTok later rejects the token (revoked, or the advertiser removed the app), API calls return an auth error
+and the owner reconnects.
 
-The refresh token is stored in `integrations.refresh_token`, which no browser can select (see
-`security_hardening.sql`) and which Desconectar clears along with the access token. It used to be parked in
-`client_id`, which the Canales page reads; re-running `ads_oauth.sql` moves an old one across. A refresh job
-reads it with the service role.
+**Who connects:** Fellito, once Llulisa has added him to her TikTok Business Center with access to the ad account.
+For ads created later, her TikTok account must also be linked there with ad-delivery permission: since January
+2026 every new campaign must run as a real TikTok account (Custom Identity is gone).
 
 ## Files
 
