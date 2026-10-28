@@ -65,11 +65,132 @@ only provider a Google-side suspension cannot touch. Keep it topped up.
 Also prefer **stable (GA) model IDs** over `-preview` ones in the gateway
 config; preview models are retired on Google's schedule.
 
+## Failure 2 — the bot goes quiet after about 11 days (out of memory)
+
+The bot stops replying, yet the service looks fine: Railway shows the
+deployment as active and the domain still answers `401 Auth required`. The log
+ends with:
+
+```
+FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory
+[gateway] exited code=1 signal=null
+```
+
+**Why it stays down.** The service runs two processes: a small wrapper that
+owns the domain and the `/setup` password, and the OpenClaw gateway behind it
+that talks to WhatsApp. When the gateway exits, the wrapper keeps running and
+does **not** start it again, and Railway's restart policy only watches the
+wrapper. So the bot stays dead until someone restarts it (see *Getting a dead
+gateway back*). This happened on 2026-10-27 at 22:08 UTC and lasted until a
+manual restart on 2026-10-28 at 19:22 UTC. Railway's memory graph shows the same
+climb and drop around 2026-10-01, when the bot was also down for most of a day.
+
+**Cause — a stray, half-linked WhatsApp account.** The gateway config lists two
+WhatsApp accounts under `channels.whatsapp.accounts`: `gp3`, the restaurant's
+linked number, and `default`, left over from a pairing that never finished. It
+has a credentials file but no phone number, hence `starting provider (unknown)`
+in the log. OpenClaw starts every listed account, so:
+
+1. `default` connects and WhatsApp closes it at once
+   (`channel exited: {"error":{},...}`).
+2. OpenClaw retries it 10 times with backoff, then its health monitor restarts
+   it (`health-monitor: restarting (reason: stopped)`) and the cycle repeats:
+   about 800 failed starts a day.
+3. Each failed start leaks memory. In the OpenClaw version this template pins
+   (v2026.3.8), the WhatsApp monitor adds a `SIGINT` listener every time it
+   starts and removes it only when the connection ends normally. A connection
+   that fails before it opens skips that cleanup, so the listener, and the
+   state it holds on to, stays in memory for good. The log shows it about an
+   hour after any restart:
+   `MaxListenersExceededWarning: ... 51 SIGINT listeners added to [process]`.
+   Current upstream OpenClaw removes the listener in a `finally`; v2026.3.8
+   does not.
+4. Memory climbs 100–160 MB a day, from about 0.8 GB right after a restart to
+   2.5 GB at the crash. When the gateway's JavaScript heap reaches Node's ~2 GB
+   limit, it dies: 11 days this time, about three weeks in September.
+
+Memory was flat at about 0.6 GB from 2026-08-29 to 2026-09-08 and started
+climbing after the 2026-09-09 redeploys, most likely when the number was
+relinked as `gp3` and `default` was left behind.
+
+**Fix — switch the stray account off.** One config edit. Saving it restarts the
+gateway for about 10 seconds; the WhatsApp pairing on the volume is kept.
+
+1. Pick a quiet moment: restaurant closed, nobody in a conversation with the
+   bot, and in particular not while the owner is in the ads walkthrough.
+2. Open `https://<service-domain>/setup` and sign in with the setup password
+   (Railway variable `SETUP_PASSWORD`).
+3. In **Config editor (advanced)**, find `channels` → `whatsapp` → `accounts` →
+   `default` and add `enabled: false` to it. Leave `gp3` as it is.
+4. In the same `whatsapp` block, if there is no `defaultAccount`, add
+   `defaultAccount: "gp3"`. Otherwise anything that sends without naming an
+   account would still pick the dead `default`.
+
+   ```json5
+   whatsapp: {
+     // ...existing settings...
+     defaultAccount: "gp3",
+     accounts: {
+       default: { /* existing keys */ enabled: false },
+       gp3: { /* unchanged */ },
+     },
+   },
+   ```
+
+5. **Save.** The editor keeps a timestamped `.bak-*` copy of the old file and
+   restarts the gateway.
+6. In the logs, `[gp3] starting provider` and `Listening for personal WhatsApp
+   inbound messages` should appear, and no new `[default]` lines. Send the bot a
+   WhatsApp message and look for `Auto-replied`.
+7. Over the next day, memory (Railway → the service → **Metrics**, or
+   `railway metrics -s clawdbot-railway-template --memory --since 1d`) should
+   stay flat near 0.8 GB instead of climbing, and the `SIGINT listeners`
+   warning should not come back.
+
+To undo, set `enabled: true` again or restore the `.bak-*` file.
+
+Until the fix is in, the crash is predictable: roughly 11 days after the last
+gateway restart. Restarting the gateway at a quiet hour before then resets the
+clock.
+
+## Getting a dead gateway back
+
+Any one of:
+
+- **Railway → `clawdbot-railway-template` → Restart** (or `railway restart`).
+  Restarts the whole container.
+- **`/setup` → Debug console → `gateway.restart` → Run.** Restarts only the
+  gateway.
+- Open `https://<service-domain>/` (the dashboard, not `/setup`) and sign in
+  with the setup password: the wrapper starts the gateway if it isn't running.
+
+Then confirm with `/healthz` (below) or a WhatsApp message.
+
+## How the uptime check sees the gateway
+
+`.github/workflows/gateway-health-watch.yml` runs every 10 minutes on GitHub
+and reads `https://<service-domain>/healthz`. That endpoint is public (no
+password, nothing secret in it) and reports `gateway.reachable`, which the
+wrapper gets by connecting to the gateway's port. The check fails, and GitHub
+emails the repo's watchers, when there is no response at all or `reachable` is
+not `true` three times over about a minute. A routine gateway restart (skill
+import, config save) takes about 10 seconds and does not trip it.
+
+It only watches: it has no credentials and restarts nothing. It also cannot see
+a gateway that is up but stuck (port open, nothing processed); a WhatsApp test
+message is still the real check.
+
 ## Harmless log noise
 
-A second WhatsApp channel logs `[default] starting provider (unknown)` →
-`channel exited` → `auto-restart attempt N/10`, forever. That `default` channel
-is unused/misconfigured; the live channel is the personal one that logs
-`Listening for personal WhatsApp inbound messages`. The noise does not affect
-service. Removing the stray `default` channel from the gateway config is
-optional cleanup.
+- `[health-monitor] [whatsapp:gp3] health-monitor: restarting (reason:
+  stale-socket)` about every 35 minutes. OpenClaw treats a WhatsApp connection
+  with no events for 30 minutes as dead and reconnects it; on a quiet number
+  that is most of the day. Each reconnect takes about a second and goes through
+  the normal shutdown path, so it does not leak. The 30-minute threshold is
+  fixed in v2026.3.8 (newer OpenClaw has
+  `gateway.channelStaleEventThresholdMinutes`). The only setting here,
+  `gateway.channelHealthCheckMinutes` (default 5), also delays catching a
+  genuinely dead connection, so leave it alone unless messages go missing.
+- `[tools] tools.profile (coding) allowlist contains unknown entries
+  (apply_patch)`, logged at error level every 15 minutes and on every message.
+  It is a tool-allowlist warning and does not affect replies.
